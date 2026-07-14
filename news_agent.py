@@ -5,6 +5,7 @@ Lee feeds RSS, filtra las del día anterior, resume con Claude Haiku y envía a 
 """
 
 import os
+import re
 import sys
 import html
 import time
@@ -23,11 +24,20 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 MODEL = "claude-haiku-4-5-20251001"   # barato y suficiente. Sube a sonnet si quieres más análisis.
-MAX_ITEMS_PER_FEED = 8                 # cuántos titulares tomar por feed antes de filtrar por fecha
+MAX_ITEMS_PER_FEED = 10                # cuántos titulares tomar por feed antes de filtrar por fecha
 HOURS_WINDOW = 36                      # ventana: cubre "ayer" con margen por husos horarios
+MAX_DESC_CHARS = 400                   # cuánta descripción del RSS pasar a Claude por noticia
 
 # Zona horaria Chile (UTC-3 en horario de verano, -4 invierno). Usamos -3 fijo para simplicidad.
 CHILE_TZ = timezone(timedelta(hours=-3))
+
+# User-Agent de navegador: varios medios (La Tercera, etc.) bloquean requests sin él.
+UA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    )
+}
 
 # Feeds agrupados por categoría. Edita libremente.
 FEEDS = {
@@ -37,17 +47,18 @@ FEEDS = {
         "https://feeds.arstechnica.com/arstechnica/index",
         "https://hnrss.org/frontpage",
     ],
-    "🇨🇱 Tech Chile": [
+    "🇨🇱 Tech (medios chilenos)": [
         "https://www.pisapapeles.net/feed/",
         "https://www.fayerwayer.com/feed/",
+        "https://www.latercera.com/arcio/rss/category/tecnologia/",
     ],
     "🇨🇱 Chile general": [
-        "https://www.biobiochile.cl/rss/",
-        "https://www.emol.com/rss/rss.asp?canal=todas",
+        "https://www.latercera.com/arcio/rss/category/nacional/",
+        "https://www.ex-ante.cl/feed/",
     ],
     "🗞️ Mundo general": [
         "https://feeds.bbci.co.uk/mundo/rss.xml",
-        "https://www.reutersagency.com/feed/?best-topics=top-news&post_type=best",
+        "https://www.latercera.com/arcio/rss/category/mundo/",
     ],
 }
 
@@ -75,6 +86,23 @@ def entry_datetime(entry):
     return None
 
 
+def clean_description(entry):
+    """Extrae y limpia la descripción/resumen del entry (sin HTML)."""
+    raw = getattr(entry, "summary", "") or ""
+    if not raw and getattr(entry, "content", None):
+        try:
+            raw = entry.content[0].value
+        except (IndexError, AttributeError, KeyError):
+            raw = ""
+    # quitar etiquetas HTML
+    text = re.sub(r"<[^>]+>", " ", raw)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # algunos feeds (Pisapapeles) meten "Lee la nota original..." al inicio; lo quitamos
+    text = re.sub(r"^Lee la nota original.*?link:\s*", "", text, flags=re.IGNORECASE)
+    return text[:MAX_DESC_CHARS]
+
+
 def collect_news():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_WINDOW)
     grouped = {}
@@ -82,7 +110,8 @@ def collect_news():
         items = []
         for url in urls:
             try:
-                feed = feedparser.parse(url)
+                resp = requests.get(url, headers=UA_HEADERS, timeout=15)
+                feed = feedparser.parse(resp.content)
             except Exception as e:
                 print(f"  ! Error leyendo {url}: {e}", file=sys.stderr)
                 continue
@@ -91,8 +120,9 @@ def collect_news():
                 if dt is None or dt >= cutoff:
                     title = html.unescape(getattr(entry, "title", "").strip())
                     link = getattr(entry, "link", "")
+                    desc = clean_description(entry)
                     if title:
-                        items.append({"title": title, "link": link})
+                        items.append({"title": title, "link": link, "desc": desc})
         # dedup por título
         seen, unique = set(), []
         for it in items:
@@ -115,21 +145,27 @@ def build_prompt(grouped):
             continue
         lines.append(f"\n## {category}")
         for it in items:
-            lines.append(f"- {it['title']} ({it['link']})")
+            entry = f"- TÍTULO: {it['title']}"
+            if it.get("desc"):
+                entry += f"\n  CONTEXTO: {it['desc']}"
+            entry += f"\n  LINK: {it['link']}"
+            lines.append(entry)
     raw = "\n".join(lines)
 
-    return f"""Eres un editor de noticias. Abajo tienes titulares crudos de RSS del día anterior, agrupados por categoría.
+    return f"""Eres un editor de noticias. Abajo tienes noticias crudas de RSS del día anterior, agrupadas por categoría. Cada una trae título, un contexto (extracto de la nota) y su link.
 
 Genera un resumen diario para Telegram con estas reglas:
-- Mantén las categorías (usa el mismo emoji + nombre como encabezado en negrita).
+- Mantén las categorías (usa el mismo emoji + nombre como encabezado en <b>negrita</b>).
 - Por cada categoría, elige SOLO las 3-4 noticias más importantes/relevantes. Descarta ruido, clickbait y duplicados.
-- Cada noticia: una línea concisa con lo esencial (qué pasó y por qué importa). Incluye el link entre paréntesis al final.
-- IDIOMA: las categorías de tecnología déjalas en inglés; las categorías generales (Chile general, Mundo general) en español.
-- Sé directo, sin relleno ni introducción. Empieza directo con la primera categoría.
-- Usa formato HTML de Telegram: <b>negrita</b> para encabezados. NADA de markdown (nada de ** ni ##).
+- Cada noticia debe ir DESARROLLADA en 2-3 frases: qué pasó, el dato o detalle clave, y por qué importa o qué implica. Apóyate en el CONTEXTO provisto, no te quedes solo en el título. No inventes datos que no estén en el material.
+- Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y el link entre paréntesis al final.
+- IDIOMA: las categorías de tecnología (🌐 Tech mundial, 🇨🇱 Tech) escríbelas en inglés; las categorías generales (Chile general, Mundo general) en español.
+- Sé claro y sustancioso pero sin relleno. Empieza directo con la primera categoría, sin introducción.
+- Usa SOLO formato HTML de Telegram: <b>negrita</b>. NADA de markdown (nada de ** ni ##).
 - Los links van como texto plano entre paréntesis, no como etiqueta <a>.
+- Deja una línea en blanco entre noticias para que se lea cómodo.
 
-Titulares crudos:
+Noticias crudas:
 {raw}
 """
 
