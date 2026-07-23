@@ -174,9 +174,12 @@ def summarize(grouped):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=2000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": build_prompt(grouped)}],
     )
+    if resp.stop_reason == "max_tokens":
+        print("  ! El resumen se cortó por max_tokens; súbelo más.",
+              file=sys.stderr)
     return resp.content[0].text.strip()
 
 
