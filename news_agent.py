@@ -183,21 +183,52 @@ def summarize(grouped):
 # ------------------------------------------------------------------
 # Envío a Telegram
 # ------------------------------------------------------------------
+def _split_for_telegram(full, limit=4000):
+    """Parte el mensaje respetando saltos de línea para no cortar una
+    etiqueta <b>…</b> por la mitad (Telegram rechaza HTML mal formado)."""
+    chunks = []
+    current = ""
+    for line in full.split("\n"):
+        # Si una sola línea excede el límite, la partimos a lo bruto.
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(current) + len(line) + 1 > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def send_telegram(text):
     fecha = datetime.now(CHILE_TZ).strftime("%A %d/%m/%Y")
     header = f"<b>📰 Resumen de noticias — {fecha}</b>\n\n"
     full = header + text
 
-    # Telegram limita a 4096 chars por mensaje: partimos si hace falta.
-    chunks = [full[i:i + 4000] for i in range(0, len(full), 4000)]
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    for chunk in chunks:
-        r = requests.post(url, data={
+    for chunk in _split_for_telegram(full):
+        payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": chunk,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-        })
+        }
+        r = requests.post(url, data=payload)
+        # Fallback: si el HTML viene mal formado (etiqueta suelta, < o &
+        # crudos), reintentamos como texto plano en vez de perder el mensaje.
+        if r.status_code == 400 and "can't parse entities" in r.text.lower():
+            print(f"  ! HTML inválido, reenviando como texto plano: {r.text}",
+                  file=sys.stderr)
+            plain = re.sub(r"<[^>]+>", "", chunk)
+            payload.pop("parse_mode")
+            payload["text"] = plain
+            r = requests.post(url, data=payload)
         if not r.ok:
             print(f"  ! Telegram error {r.status_code}: {r.text}", file=sys.stderr)
             r.raise_for_status()
