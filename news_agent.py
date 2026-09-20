@@ -275,8 +275,9 @@ def resolve_links(items):
         print(f"  links de Google News resueltos: {n}")
 
 
-def fetch_feed(url, cutoff):
+def fetch_feed(url, cutoff, max_items=None):
     """Devuelve la lista de items recientes de un feed."""
+    max_items = max_items or MAX_ITEMS_PER_FEED
     try:
         resp = requests.get(url, headers=UA_HEADERS, timeout=15)
         feed = feedparser.parse(resp.content)
@@ -291,7 +292,7 @@ def fetch_feed(url, cutoff):
         return []
     is_gnews = "news.google.com" in url
     items = []
-    for entry in feed.entries[:MAX_ITEMS_PER_FEED]:
+    for entry in feed.entries[:max_items]:
         dt = entry_datetime(entry)
         if dt is not None and dt < cutoff:
             continue
@@ -348,7 +349,7 @@ def collect_news():
 # ------------------------------------------------------------------
 # Clasificación de noticias tech con Claude
 # ------------------------------------------------------------------
-def format_items(items, with_link=False):
+def format_items(items, with_link=False, with_lang=True):
     lines = []
     for i, it in enumerate(items, 1):
         line = f"[{i}] TÍTULO: {it['title']}"
@@ -357,7 +358,8 @@ def format_items(items, with_link=False):
         if it.get("desc"):
             line += f"\n    CONTEXTO: {it['desc']}"
         if with_link:
-            line += f"\n    IDIOMA: {'inglés' if it.get('lang') == 'en' else 'español'}"
+            if with_lang:
+                line += f"\n    IDIOMA: {'inglés' if it.get('lang') == 'en' else 'español'}"
             if it.get("link"):
                 line += f"\n    LINK: {it['link']}"
         lines.append(line)
@@ -552,10 +554,11 @@ def _split_for_telegram(full, limit=4000):
     return chunks
 
 
-def send_telegram(text):
-    fecha = datetime.now(CHILE_TZ).strftime("%A %d/%m/%Y")
-    header = f"<b>📰 Resumen de noticias — {fecha}</b>\n\n"
-    full = header + text
+def send_telegram(text, header=None):
+    if header is None:
+        fecha = datetime.now(CHILE_TZ).strftime("%A %d/%m/%Y")
+        header = f"📰 Resumen de noticias — {fecha}"
+    full = f"<b>{header}</b>\n\n" + text
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     for chunk in _split_for_telegram(full):

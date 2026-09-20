@@ -8,6 +8,17 @@ Resumen automático cada mañana de tech mundial (inglés), tech Chile (inglés)
 3. **Selecciona** con cupos fijos: 3 tech Chile, 5 tech mundial, 2 Chile, 2 mundo. Si un día no hay suficiente tech chileno, la diferencia se rellena con más tech mundial. Las noticias tech de finanzas o legal/regulación no entran en las secciones tech; si son muy relevantes pasan como candidatas a las secciones generales.
 4. **Redacta** el resumen con Claude y lo envía a Telegram.
 
+## Resumen semanal de videojuegos 🎮
+Además del diario, `gaming_agent.py` manda los lunes a las 08:00 (Chile) un resumen de la semana anterior (lunes a domingo) para un jugador de PlayStation, Nintendo y PC. Usa los mismos secrets y el mismo chat.
+
+1. Lee feeds de medios de videojuegos (Eurogamer, PC Gamer, Push Square, Nintendo Life, PlayStation Blog, Steam, etc.) y búsquedas de Google News en español para ofertas y juegos gratis.
+2. **Clasifica** cada noticia en lotes con Claude: tipo (`lanzamiento`, `actualizacion`, `review`, `oferta`, `gratis`, `hardware`, `industria`, `otro`), plataforma y relevancia 1-5. Lo exclusivo de Xbox o móvil, los rumores y las filtraciones quedan fuera.
+3. **Arma cinco secciones** con cupos: 🎮 Lanzamientos y anuncios (4), 🔧 Actualizaciones y DLC (3), ⭐ Reviews destacadas (3), 🛒 Ofertas y juegos gratis (4), 🕹️ Consolas, tiendas e industria (2).
+4. **Redacta** todo en español y lo envía a Telegram.
+
+- **Probar sin enviar**: en Actions → "Resumen semanal de videojuegos" → "Run workflow" con `dry_run` marcado. El input `days` acota la ventana (p. ej. `3`) para probar entre semana.
+- **Ajustar**: `FEEDS`, `SECTIONS` (cupos), `MIN_SCORE` y los prompts están en `gaming_agent.py`.
+
 ## Setup (una sola vez, ~10 minutos)
 
 ### 1. Crear el bot de Telegram
@@ -49,7 +60,7 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 3. En ~1 min deberías recibir el mensaje en Telegram.
 
 ## Personalización
-- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml`. Está en UTC. 11:00 UTC ≈ 08:00 Chile verano.
+- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC. 11:00 UTC ≈ 08:00 Chile verano.
 - **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
 - **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
 - **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 4) exige que las noticias de esa sección sean de peso; si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). Baja `MIN_TECH_CHILE_SCORE` a 3 si prefieres la sección siempre llena.

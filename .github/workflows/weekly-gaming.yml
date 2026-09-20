@@ -1,0 +1,42 @@
+name: Resumen semanal de videojuegos
+
+on:
+  schedule:
+    # Lunes 11:00 UTC = 08:00 en Chile (horario de verano, UTC-3).
+    - cron: "0 11 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo imprimir el resumen en el log, sin enviar a Telegram"
+        type: boolean
+        default: false
+      days:
+        description: "Ventana en días (vacío = desde el lunes de la semana pasada)"
+        type: string
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar agente semanal
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          args=""
+          [ "$DRY_RUN" = "true" ] && args="$args --dry-run"
+          [ -n "$DAYS" ] && args="$args --days $DAYS"
+          python gaming_agent.py $args
