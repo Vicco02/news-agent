@@ -91,7 +91,7 @@ TECH_FEEDS = [
     "https://hnrss.org/frontpage",
     # Medios chilenos de tech (cubren mucho tech global; el clasificador separa)
     "https://www.pisapapeles.net/feed/",
-    "https://www.fayerwayer.com/arc/outboundfeeds/rss/",
+    "https://www.fayerwayer.com/arc/outboundfeeds/rss/?outputType=xml",
     "https://www.latercera.com/arcio/rss/category/tecnologia/",
     # Búsquedas en Google News Chile para captar ecosistema tech local
     google_news("startup chilena"),
@@ -272,7 +272,7 @@ Para cada noticia devuelve:
   * finanzas: resultados trimestrales, acciones, valorización, despidos por costos, macro.
   * legal: juicios, multas, regulación, antimonopolio, privacidad/legislación.
   * otro: tutoriales, opinión, ofertas, ciencia general, gaming casual, ruido.
-- "score": 1-5 importancia/relevancia para alguien que trabaja en tech y le interesan productos, IA, nuevas funciones y empresas. Usa 1 para clickbait, ofertas, tutoriales y para DUPLICADOS (si dos noticias cuentan lo mismo, deja 1 en todas menos la mejor).
+- "score": 1-5 importancia/relevancia para alguien que trabaja en tech y le interesan productos, IA, nuevas funciones y empresas. Usa 1 para clickbait, ofertas, tutoriales y para DUPLICADOS: si dos o más noticias tratan el MISMO hecho (aunque desde distinto ángulo o medio, p. ej. "startup X entra a Y Combinator" y "los chilenos que llegaron a Y Combinator"), deja score 1 en todas menos la más completa.
 
 Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia en el mismo orden:
 [{"id": 1, "region": "global", "topic": "ia", "score": 4}, ...]
