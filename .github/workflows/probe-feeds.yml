@@ -1,0 +1,28 @@
+name: Verificar feeds RSS
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "URLs de feeds a verificar, separadas por espacios o saltos de línea"
+        type: string
+        required: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Verificar feeds
+        env:
+          URLS: ${{ inputs.urls }}
+        # Sin comillas a propósito: cada URL (separada por espacio o salto de línea) es un argumento.
+        run: python probe_feeds.py $URLS

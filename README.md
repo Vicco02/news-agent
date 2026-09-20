@@ -1,6 +1,12 @@
 # 📰 Agente diario de noticias → Telegram
 
-Resumen automático cada mañana de tech mundial (inglés), tech Chile, Chile general y mundo general (español). Corre gratis en GitHub Actions.
+Resumen automático cada mañana de tech mundial (inglés), tech Chile (inglés), Chile y mundo (español). Corre gratis en GitHub Actions.
+
+## Cómo funciona
+1. Lee los feeds RSS y se queda con lo publicado en las últimas 36 horas.
+2. **Clasifica** todas las noticias tech con Claude según la región REAL de la noticia (`chile` / `latam` / `global`) y el tipo de tema (`producto`, `ia`, `feature`, `empresa`, `finanzas`, `legal`, `otro`). Así "Tech Chile" solo incluye noticias que tratan de Chile, aunque vengan de un medio chileno que cubre tech global.
+3. **Selecciona** con cupos fijos: 3 tech Chile, 5 tech mundial, 2 Chile, 2 mundo. Si un día no hay suficiente tech chileno, la diferencia se rellena con más tech mundial. Las noticias tech de finanzas o legal/regulación no entran en las secciones tech; si son muy relevantes pasan como candidatas a las secciones generales.
+4. **Redacta** el resumen con Claude y lo envía a Telegram.
 
 ## Setup (una sola vez, ~10 minutos)
 
@@ -44,11 +50,16 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 
 ## Personalización
 - **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml`. Está en UTC. 11:00 UTC ≈ 08:00 Chile verano.
-- **Fuentes**: edita el diccionario `FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS.
-- **Cantidad/estilo**: ajusta el prompt en `build_prompt()`.
+- **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
+- **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
+- **Qué temas tech entran**: `PREFERRED_TECH_TOPICS` (van a las secciones tech) y `GENERAL_TECH_TOPICS` (van a las generales si son relevantes).
+- **Criterios de clasificación**: ajusta `CLASSIFY_PROMPT`. **Estilo del resumen**: ajusta el prompt en `build_prompt()`.
+- **Probar sin enviar**: `python news_agent.py --dry-run` imprime el resumen en consola (solo necesita `ANTHROPIC_API_KEY`).
+- **Verificar un feed nuevo**: `python probe_feeds.py URL` dice si es RSS válido y muestra sus titulares. El agente también registra en el log de cada corrida el estado HTTP y la cantidad de entradas por feed.
+- **Medios sin RSS o que bloquean bots** (Emol, DF): se leen con `google_news("site:emol.com tecnología")`.
 - **Modelo**: cambia `MODEL` a `claude-sonnet-4-6` si quieres más análisis (cuesta más).
 
 ## Costo
 - GitHub Actions: gratis (2000 min/mes en repos privados; esto usa ~1 min/día).
 - Telegram: gratis.
-- Claude Haiku: centavos al mes con ~20 noticias/día.
+- Claude Haiku: centavos al mes (dos llamadas por día: clasificar + redactar).
