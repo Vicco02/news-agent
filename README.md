@@ -55,6 +55,8 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 - **Qué temas tech entran**: `PREFERRED_TECH_TOPICS` (van a las secciones tech) y `GENERAL_TECH_TOPICS` (van a las generales si son relevantes).
 - **Criterios de clasificación**: ajusta `CLASSIFY_PROMPT`. **Estilo del resumen**: ajusta el prompt en `build_prompt()`.
 - **Probar sin enviar**: `python news_agent.py --dry-run` imprime el resumen en consola (solo necesita `ANTHROPIC_API_KEY`).
+- **Verificar un feed nuevo**: `python probe_feeds.py URL` dice si es RSS válido y muestra sus titulares. El agente también registra en el log de cada corrida el estado HTTP y la cantidad de entradas por feed.
+- **Medios sin RSS o que bloquean bots** (Emol, DF): se leen con `google_news("site:emol.com tecnología")`.
 - **Modelo**: cambia `MODEL` a `claude-sonnet-4-6` si quieres más análisis (cuesta más).
 
 ## Costo

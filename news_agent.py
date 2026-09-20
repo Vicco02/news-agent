@@ -91,24 +91,19 @@ TECH_FEEDS = [
     "https://hnrss.org/frontpage",
     # Medios chilenos de tech (cubren mucho tech global; el clasificador separa)
     "https://www.pisapapeles.net/feed/",
-    "https://www.fayerwayer.com/feed/",
+    "https://www.fayerwayer.com/arc/outboundfeeds/rss/",
     "https://www.latercera.com/arcio/rss/category/tecnologia/",
     # Búsquedas en Google News Chile para captar ecosistema tech local
     google_news("startup chilena"),
     google_news("inteligencia artificial Chile empresa"),
     google_news("fintech Chile lanzamiento"),
-    # CANDIDATOS EN PRUEBA (se depuran según el log)
-    "https://www.emol.com/rss/rss.asp?canal=tecnologia",
-    "https://www.emol.com/rss/",
-    "https://www.df.cl/rss",
-    "https://www.df.cl/",
-    "https://www.biobiochile.cl/rss/tecnologia.xml",
-    "https://www.biobiochile.cl/lista/categorias/tecnologia/feed",
+    # Negocios / ecosistema chileno y latam (el clasificador filtra lo tech)
     "https://www.latercera.com/arcio/rss/category/pulso/",
     "https://www.trendtic.cl/feed/",
     "https://contxto.com/en/feed/",
-    "https://www.elmostrador.cl/feed/",
-    "https://www.cooperativa.cl/",
+    # Emol bloquea requests directos y DF no tiene RSS: los leemos vía Google News
+    google_news("site:emol.com tecnología"),
+    google_news("site:df.cl tecnología OR startup OR inteligencia artificial"),
 ]
 
 GENERAL_FEEDS = {
@@ -474,6 +469,7 @@ def send_telegram(text):
 
 # ------------------------------------------------------------------
 def main():
+    sys.stdout.reconfigure(line_buffering=True)
     dry_run = "--dry-run" in sys.argv
     if not dry_run and not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         sys.exit("Faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (o usa --dry-run).")
