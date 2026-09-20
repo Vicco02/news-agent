@@ -196,6 +196,7 @@ def select(items):
 # Redacción
 # ------------------------------------------------------------------
 def build_prompt(chosen, start, end):
+    today = datetime.now(CHILE_TZ)
     raw = ""
     for title, _tipos, quota in SECTIONS:
         cands = chosen.get(title, [])
@@ -204,7 +205,7 @@ def build_prompt(chosen, start, end):
         raw += (f"\n## {title}\n(elige como máximo {quota}, las más relevantes; "
                 f"descarta el resto)\n{format_items(cands, with_link=True, with_lang=False)}\n")
 
-    return f"""Eres el editor de una newsletter semanal de videojuegos para un jugador de PlayStation, Nintendo y PC. Abajo tienes noticias crudas de RSS de la semana del {start:%d/%m} al {end:%d/%m}, agrupadas por sección. Cada una trae título, contexto (extracto de la nota) y link.
+    return f"""Eres el editor de una newsletter semanal de videojuegos para un jugador de PlayStation, Nintendo y PC. Hoy es {today:%d/%m/%Y}. Abajo tienes noticias crudas de RSS de la semana del {start:%d/%m} al {end:%d/%m}, agrupadas por sección. Cada una trae título, contexto (extracto de la nota) y link.
 
 Genera el resumen semanal para Telegram con estas reglas:
 - Usa las secciones tal cual (mismo emoji + nombre como encabezado en <b>negrita</b>), en el mismo orden. Omite una sección solo si no tiene noticias que valgan la pena.
@@ -212,6 +213,8 @@ Genera el resumen semanal para Telegram con estas reglas:
 - NUNCA repitas un hecho: si varias noticias cubren lo mismo (aunque estén en secciones distintas o en distinto idioma), escríbelo una sola vez usando la fuente más completa.
 - Cada noticia va en la sección donde aparece abajo; no muevas noticias entre secciones.
 - Cada noticia DESARROLLADA en 2-3 frases: qué pasó, el dato clave (fecha de lanzamiento, plataformas, precio o porcentaje de descuento, hasta cuándo dura la oferta, nota de reviews) y por qué importa. Apóyate en el CONTEXTO, no inventes datos que no estén en el material. Si una oferta o juego gratis tiene fecha límite y está en el material, dila.
+- Fechas: compara con la fecha de hoy. Si un juego sale después de hoy, di que "sale el X", nunca que "ya está disponible".
+- En 🛒 Ofertas y juegos gratis prioriza variedad: primero los juegos gratis (Epic, PS Plus, fines de semana gratis), después las ofertas, y no más de dos ofertas de la misma tienda. Si el material trae precios en euros o libras, no los repitas: da solo el porcentaje de descuento (el jugador compra en dólares o pesos chilenos).
 - Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y al final, entre paréntesis, el LINK COMPLETO tal cual aparece en el material (la URL entera que empieza con https://). Nunca pongas solo el dominio ni abrevies la URL. Si usaste varias fuentes, pon el link de la más completa.
 - No menciones ofertas ni promociones limitadas a otras regiones (Sudeste Asiático, Japón, Reino Unido, etc.): el jugador compra en tiendas de Chile/Latinoamérica y EE.UU.
 - IDIOMA: TODO en español, aunque la fuente esté en inglés. Traduce los titulares; los nombres de juegos, estudios y tiendas se dejan tal cual.
