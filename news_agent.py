@@ -45,6 +45,8 @@ MAX_DESC_CHARS = 400                   # cuánta descripción del RSS pasar a Cl
 # Cupos por sección del resumen. Si "Tech Chile" no alcanza su cupo, la
 # diferencia se suma a "Tech mundial" para que el total tech se mantenga.
 QUOTA_TECH_CHILE = 3
+QUOTA_TECH_LATAM = 1                   # extra en Tech Chile para una noticia latam, solo si es relevante
+MIN_LATAM_SCORE = 4
 QUOTA_TECH_MUNDIAL = 5
 QUOTA_CHILE_GENERAL = 2
 QUOTA_MUNDO_GENERAL = 2
@@ -109,7 +111,7 @@ GENERAL_FEEDS = {
 }
 
 SECTION_TECH_MUNDIAL = "🌐 Tech mundial"
-SECTION_TECH_CHILE = "🇨🇱 Tech Chile"
+SECTION_TECH_CHILE = "🇨🇱 Tech Chile (+ Latam)"
 SECTION_CHILE = "🇨🇱 Chile"
 SECTION_MUNDO = "🗞️ Mundo"
 
@@ -250,6 +252,7 @@ Para cada noticia devuelve:
   * ia: modelos, herramientas y avances de inteligencia artificial.
   * feature: nuevas funciones o actualizaciones de productos existentes.
   * empresa: movimientos estratégicos (nuevos negocios, alianzas, adquisiciones, fundadores, rondas de inversión de startups).
+    Rondas de inversión: son "empresa", pero dales score 4-5 SOLO si es una ronda grande o de una startup conocida; una ronda chica o de una startup desconocida es score 2.
   * finanzas: resultados trimestrales, acciones, valorización, despidos por costos, macro.
   * legal: juicios, multas, regulación, antimonopolio, privacidad/legislación.
   * otro: tutoriales, opinión, ofertas, ciencia general, gaming casual, ruido.
@@ -312,10 +315,18 @@ def select_tech(items, labels):
         )
 
     chile = ranked(lambda it: it["region"] == "chile" and it["topic"] in PREFERRED_TECH_TOPICS)
-    mundo = ranked(lambda it: it["region"] != "chile" and it["topic"] in PREFERRED_TECH_TOPICS)
+    latam = ranked(lambda it: it["region"] == "latam" and it["topic"] in PREFERRED_TECH_TOPICS
+                   and it["score"] >= MIN_LATAM_SCORE)
 
     tech_chile = chile[:QUOTA_TECH_CHILE]
-    faltan = QUOTA_TECH_CHILE - len(tech_chile)
+    # Hasta QUOTA_TECH_LATAM noticias latam relevantes se suman a Tech Chile.
+    tech_chile += latam[:QUOTA_TECH_LATAM]
+    chosen = {id(it) for it in tech_chile}
+
+    # Lo que no entró en Tech Chile (incluido latam) compite en Tech mundial.
+    mundo = ranked(lambda it: it["region"] != "chile" and it["topic"] in PREFERRED_TECH_TOPICS
+                   and id(it) not in chosen)
+    faltan = QUOTA_TECH_CHILE - len(chile[:QUOTA_TECH_CHILE])
     tech_mundial = mundo[:QUOTA_TECH_MUNDIAL + faltan]
 
     extras = {SECTION_CHILE: [], SECTION_MUNDO: []}
@@ -323,7 +334,8 @@ def select_tech(items, labels):
         extras[SECTION_CHILE if it["region"] == "chile" else SECTION_MUNDO].append(it)
 
     print(
-        f"  clasificación: {len(chile)} tech Chile, {len(mundo)} tech mundial, "
+        f"  clasificación: {len(chile)} tech Chile, {len(latam)} latam relevantes, "
+        f"{len(mundo)} tech mundial, "
         f"{sum(len(v) for v in extras.values())} tech finanzas/legal -> general"
     )
     return tech_chile, tech_mundial, extras
@@ -339,8 +351,8 @@ def build_prompt(tech_chile, tech_mundial, general, extras):
         return f"\n## {title}\n({instruction})\n{format_items(items, with_link=True)}\n"
 
     fixed = "escribe TODAS estas noticias, en este orden; ya están seleccionadas"
-    raw = block(SECTION_TECH_MUNDIAL, tech_mundial, fixed)
-    raw += block(SECTION_TECH_CHILE, tech_chile, fixed)
+    raw = block(SECTION_TECH_CHILE, tech_chile, fixed)
+    raw += block(SECTION_TECH_MUNDIAL, tech_mundial, fixed)
 
     for section, quota in ((SECTION_CHILE, QUOTA_CHILE_GENERAL),
                            (SECTION_MUNDO, QUOTA_MUNDO_GENERAL)):
@@ -361,7 +373,7 @@ Genera un resumen diario para Telegram con estas reglas:
 - {quota_note}
 - Cada noticia debe ir DESARROLLADA en 2-3 frases: qué pasó, el dato o detalle clave, y por qué importa o qué implica. Apóyate en el CONTEXTO provisto, no te quedes solo en el título. No inventes datos que no estén en el material.
 - Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y el link entre paréntesis al final.
-- IDIOMA: las secciones tech ({SECTION_TECH_MUNDIAL}, {SECTION_TECH_CHILE}) escríbelas en inglés; las secciones generales ({SECTION_CHILE}, {SECTION_MUNDO}) en español.
+- IDIOMA: cada noticia se escribe en el idioma de su fuente: si el TÍTULO/CONTEXTO está en inglés, escríbela en inglés; si está en español, en español. No traduzcas. Los encabezados de sección van tal cual.
 - Sé claro y sustancioso pero sin relleno. Empieza directo con la primera sección, sin introducción.
 - Usa SOLO formato HTML de Telegram: <b>negrita</b>. NADA de markdown (nada de ** ni ##).
 - Los links van como texto plano entre paréntesis, no como etiqueta <a>.
