@@ -97,6 +97,18 @@ TECH_FEEDS = [
     google_news("startup chilena"),
     google_news("inteligencia artificial Chile empresa"),
     google_news("fintech Chile lanzamiento"),
+    # CANDIDATOS EN PRUEBA (se depuran según el log)
+    "https://www.emol.com/rss/rss.asp?canal=tecnologia",
+    "https://www.emol.com/rss/",
+    "https://www.df.cl/rss",
+    "https://www.df.cl/",
+    "https://www.biobiochile.cl/rss/tecnologia.xml",
+    "https://www.biobiochile.cl/lista/categorias/tecnologia/feed",
+    "https://www.latercera.com/arcio/rss/category/pulso/",
+    "https://www.trendtic.cl/feed/",
+    "https://contxto.com/en/feed/",
+    "https://www.elmostrador.cl/feed/",
+    "https://www.cooperativa.cl/",
 ]
 
 GENERAL_FEEDS = {
@@ -172,6 +184,12 @@ def fetch_feed(url, cutoff):
     except Exception as e:
         print(f"  ! Error leyendo {url}: {e}", file=sys.stderr)
         return []
+    if not feed.entries:
+        # Diagnóstico: si no es RSS, listamos links que parezcan feeds.
+        hrefs = sorted(set(re.findall(r'href="([^"]*(?:rss|feed)[^"]*)"', resp.text, re.I)))
+        print(f"  ! {url}: HTTP {resp.status_code}, sin entradas RSS. "
+              f"Links rss/feed en la página: {hrefs[:15]}", file=sys.stderr)
+        return []
     is_gnews = "news.google.com" in url
     items = []
     for entry in feed.entries[:MAX_ITEMS_PER_FEED]:
@@ -190,6 +208,9 @@ def fetch_feed(url, cutoff):
             "desc": clean_description(entry),
             "source": source_name(entry, url),
         })
+    print(f"  feed {urlparse(url).netloc.replace('www.', '')}: HTTP {resp.status_code}, "
+          f"{len(feed.entries)} entradas, {len(items)} recientes"
+          + (f" [{url[:70]}]" if is_gnews or len(feed.entries) == 0 else ""))
     return items
 
 
