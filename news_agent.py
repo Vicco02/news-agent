@@ -62,6 +62,10 @@ MIN_TECH_SCORE = 2                     # descarta ruido (score 1 = irrelevante/d
 # el cupo que falte se rellena con tech mundial. Baja a 3 si prefieres que
 # Tech Chile salga siempre lleno aunque sean notas menores.
 MIN_TECH_CHILE_SCORE = 4
+# Los cupos que Tech Chile no llena pasan a Tech mundial, pero solo con
+# noticias de al menos este score: mejor un resumen más corto que rellenar
+# con notas menores.
+MIN_FILL_SCORE = 3
 
 # Zona horaria Chile (UTC-3 en horario de verano, -4 invierno). Usamos -3 fijo para simplicidad.
 CHILE_TZ = timezone(timedelta(hours=-3))
@@ -448,7 +452,9 @@ def select_tech(items, labels):
     mundo = ranked(lambda it: it["region"] != "chile" and it["topic"] in PREFERRED_TECH_TOPICS
                    and id(it) not in chosen)
     faltan = QUOTA_TECH_CHILE - len(chile[:QUOTA_TECH_CHILE])
-    tech_mundial = mundo[:QUOTA_TECH_MUNDIAL + faltan]
+    tech_mundial = mundo[:QUOTA_TECH_MUNDIAL]
+    tech_mundial += [it for it in mundo[QUOTA_TECH_MUNDIAL:QUOTA_TECH_MUNDIAL + faltan]
+                     if it["score"] >= MIN_FILL_SCORE]
 
     extras = {SECTION_CHILE: [], SECTION_MUNDO: []}
     for it in ranked(lambda it: it["topic"] in GENERAL_TECH_TOPICS and it["score"] >= 4):
