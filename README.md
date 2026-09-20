@@ -52,6 +52,9 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 - **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml`. Está en UTC. 11:00 UTC ≈ 08:00 Chile verano.
 - **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
 - **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
+- **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 4) exige que las noticias de esa sección sean de peso; si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). Baja `MIN_TECH_CHILE_SCORE` a 3 si prefieres la sección siempre llena.
+- **Idioma**: cada noticia se redacta en el idioma de su fuente (detectado automáticamente) y se le indica a Claude con una etiqueta `IDIOMA`. Las de TechCrunch/The Verge salen en inglés; las de medios chilenos, en español.
+- **Links de Google News**: los links de redirección (`news.google.com/rss/articles/...`) se convierten a la URL real de la nota antes de redactar. Si Google cambia el mecanismo, queda el link largo original y se avisa en el log.
 - **Qué temas tech entran**: `PREFERRED_TECH_TOPICS` (van a las secciones tech) y `GENERAL_TECH_TOPICS` (van a las generales si son relevantes).
 - **Criterios de clasificación**: ajusta `CLASSIFY_PROMPT`. **Estilo del resumen**: ajusta el prompt en `build_prompt()`.
 - **Probar sin enviar**: `python news_agent.py --dry-run` imprime el resumen en consola (solo necesita `ANTHROPIC_API_KEY`).

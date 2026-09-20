@@ -22,9 +22,10 @@ import sys
 import html
 import json
 import time
+import base64
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 import feedparser
 import requests
@@ -57,6 +58,14 @@ QUOTA_MUNDO_GENERAL = 2
 PREFERRED_TECH_TOPICS = {"producto", "ia", "feature", "empresa"}
 GENERAL_TECH_TOPICS = {"finanzas", "legal"}
 MIN_TECH_SCORE = 2                     # descarta ruido (score 1 = irrelevante/duplicado)
+# Tech Chile solo con noticias de peso: si no hay suficientes con este score,
+# el cupo que falte se rellena con tech mundial. Baja a 3 si prefieres que
+# Tech Chile salga siempre lleno aunque sean notas menores.
+MIN_TECH_CHILE_SCORE = 4
+# Los cupos que Tech Chile no llena pasan a Tech mundial, pero solo con
+# noticias de al menos este score: mejor un resumen más corto que rellenar
+# con notas menores.
+MIN_FILL_SCORE = 3
 
 # Zona horaria Chile (UTC-3 en horario de verano, -4 invierno). Usamos -3 fijo para simplicidad.
 CHILE_TZ = timezone(timedelta(hours=-3))
@@ -171,6 +180,101 @@ def source_name(entry, feed_url):
     return urlparse(feed_url).netloc.replace("www.", "")
 
 
+# Palabras muy frecuentes de cada idioma; basta contar cuáles aparecen más.
+_ES_WORDS = {
+    "el", "la", "los", "las", "de", "del", "que", "y", "en", "un", "una", "por",
+    "para", "con", "se", "su", "sus", "al", "es", "más", "como", "pero", "lo",
+    "este", "esta", "han", "ha", "fue", "son", "sobre", "entre", "tras", "hasta",
+    "también", "ya", "según", "nuevo", "nueva", "años", "millones",
+}
+_EN_WORDS = {
+    "the", "of", "and", "to", "in", "is", "for", "on", "with", "that", "as",
+    "it", "its", "by", "from", "at", "this", "are", "be", "has", "have", "was",
+    "will", "new", "an", "or", "but", "not", "after", "into", "how", "what",
+    "says", "more", "than", "about", "you", "your", "we", "can", "up", "out",
+}
+
+
+def detect_lang(text):
+    """Devuelve "en" o "es" según qué palabras frecuentes dominan el texto."""
+    words = re.findall(r"[a-záéíóúñü]+", text.lower())
+    es = sum(w in _ES_WORDS for w in words)
+    en = sum(w in _EN_WORDS for w in words)
+    return "en" if en > es else "es"
+
+
+_GNEWS_CACHE = {}
+
+
+def _gnews_article_id(url):
+    parts = urlparse(url).path.rstrip("/").split("/")
+    if "news.google.com" in url and len(parts) >= 2 and parts[-2] in ("articles", "read"):
+        return parts[-1]
+    return None
+
+
+def resolve_gnews_link(url):
+    """Convierte un link de redirección de Google News (news.google.com/rss/
+    articles/...) en la URL real de la nota. Si algo falla, devuelve el link
+    original: nunca rompe el resumen, solo queda el link largo."""
+    art_id = _gnews_article_id(url)
+    if not art_id:
+        return url
+    if art_id in _GNEWS_CACHE:
+        return _GNEWS_CACHE[art_id]
+    real = url
+    try:
+        # Formato antiguo: el id es base64 con la URL embebida.
+        raw = base64.urlsafe_b64decode(art_id + "=" * (-len(art_id) % 4))
+        m = re.search(rb"https?://[\x21-\x7e]+", raw)
+        if m and not raw.startswith(b"AU_yqL"):
+            real = m.group(0).decode("utf-8", "ignore")
+        else:
+            # Formato nuevo (2024+): hay que pedirle a Google que lo decodifique.
+            page = requests.get(f"https://news.google.com/articles/{art_id}",
+                                headers=UA_HEADERS, timeout=10).text
+            sg = re.search(r'data-n-a-sg="([^"]+)"', page)
+            ts = re.search(r'data-n-a-ts="(\d+)"', page)
+            if sg and ts:
+                req = (
+                    '["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,'
+                    'null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],'
+                    f'"{art_id}",{ts.group(1)},"{sg.group(1)}"]'
+                )
+                body = "f.req=" + quote(json.dumps([[["Fbv4je", req, None, "generic"]]]))
+                r = requests.post(
+                    "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+                    headers={**UA_HEADERS,
+                             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+                    data=body, timeout=10,
+                )
+                outer = json.loads(r.text.split("\n\n", 1)[1])
+                for row in outer:
+                    if isinstance(row, list) and len(row) > 2 and isinstance(row[2], str):
+                        cand = json.loads(row[2])
+                        if isinstance(cand, list) and len(cand) > 1 and str(cand[1]).startswith("http"):
+                            real = cand[1]
+                            break
+    except Exception as e:
+        print(f"  ! No pude resolver link de Google News ({e}); dejo el original",
+              file=sys.stderr)
+    _GNEWS_CACHE[art_id] = real
+    return real
+
+
+def resolve_links(items):
+    """Reemplaza in-place los links de Google News por la URL real."""
+    n = 0
+    for it in items:
+        if _gnews_article_id(it.get("link", "")):
+            new = resolve_gnews_link(it["link"])
+            if new != it["link"]:
+                it["link"] = new
+                n += 1
+    if n:
+        print(f"  links de Google News resueltos: {n}")
+
+
 def fetch_feed(url, cutoff):
     """Devuelve la lista de items recientes de un feed."""
     try:
@@ -197,11 +301,13 @@ def fetch_feed(url, cutoff):
         if is_gnews:
             # Google News pone " - Medio" al final del título; lo quitamos.
             title = re.sub(r"\s+-\s+[^-]+$", "", title)
+        desc = clean_description(entry)
         items.append({
             "title": title,
             "link": getattr(entry, "link", ""),
-            "desc": clean_description(entry),
+            "desc": desc,
             "source": source_name(entry, url),
+            "lang": detect_lang(f"{title} {desc}"),
         })
     print(f"  feed {urlparse(url).netloc.replace('www.', '')}: HTTP {resp.status_code}, "
           f"{len(feed.entries)} entradas, {len(items)} recientes"
@@ -250,8 +356,10 @@ def format_items(items, with_link=False):
             line += f" (fuente: {it['source']})"
         if it.get("desc"):
             line += f"\n    CONTEXTO: {it['desc']}"
-        if with_link and it.get("link"):
-            line += f"\n    LINK: {it['link']}"
+        if with_link:
+            line += f"\n    IDIOMA: {'inglés' if it.get('lang') == 'en' else 'español'}"
+            if it.get("link"):
+                line += f"\n    LINK: {it['link']}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -260,7 +368,7 @@ CLASSIFY_PROMPT = """Eres un editor de tecnología. Clasifica cada noticia de la
 
 Para cada noticia devuelve:
 - "region": "chile" | "latam" | "global"
-  * "chile" SOLO si la noticia trata de algo chileno: empresa/startup chilena, producto o servicio lanzado en Chile o hecho por chilenos, decisión de una empresa o del Estado de Chile en tech, evento tech en Chile. Que el medio sea chileno NO la hace chilena: una nota de Pisapapeles sobre el nuevo iPhone es "global".
+  * "chile" SOLO si la noticia trata de algo chileno: empresa/startup chilena, producto o servicio lanzado en Chile o hecho por chilenos, decisión de una empresa o del Estado de Chile en tech, evento tech en Chile. La región es DÓNDE ocurre o impacta la noticia, no la nacionalidad de la empresa: una empresa extranjera (Rappi, Mercado Libre, Uber) que se expande, lanza algo o toma decisiones en Chile es "chile". Que el medio sea chileno NO la hace chilena: una nota de Pisapapeles sobre el nuevo iPhone es "global".
   * "latam" si trata de otro país de Latinoamérica.
   * "global" para todo lo demás.
 - "topic": "producto" | "ia" | "feature" | "empresa" | "finanzas" | "legal" | "otro"
@@ -271,7 +379,7 @@ Para cada noticia devuelve:
     Rondas de inversión: son "empresa", pero dales score 4-5 SOLO si es una ronda grande o de una startup conocida; una ronda chica o de una startup desconocida es score 2.
   * finanzas: resultados trimestrales, acciones, valorización, despidos por costos, macro.
   * legal: juicios, multas, regulación, antimonopolio, privacidad/legislación.
-  * otro: tutoriales, opinión, ofertas, ciencia general, gaming casual, ruido.
+  * otro: tutoriales, opinión, entrevistas, columnas, notas panorámicas o de análisis general ("cinco claves de...", "qué esperar de..."), ofertas, ciencia general, gaming casual, ruido. Una entrevista o columna sobre IA es "otro", no "ia": las secciones tech son para HECHOS (lanzamientos, avances, movimientos de empresas).
 - "score": 1-5 importancia/relevancia para alguien que trabaja en tech y le interesan productos, IA, nuevas funciones y empresas. Usa 1 para clickbait, ofertas, tutoriales y para DUPLICADOS: si dos o más noticias tratan el MISMO hecho (aunque desde distinto ángulo o medio, p. ej. "startup X entra a Y Combinator" y "los chilenos que llegaron a Y Combinator"), deja score 1 en todas menos la más completa.
 
 Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia en el mismo orden:
@@ -330,7 +438,8 @@ def select_tech(items, labels):
             key=lambda it: -it["score"],
         )
 
-    chile = ranked(lambda it: it["region"] == "chile" and it["topic"] in PREFERRED_TECH_TOPICS)
+    chile = ranked(lambda it: it["region"] == "chile" and it["topic"] in PREFERRED_TECH_TOPICS
+                   and it["score"] >= MIN_TECH_CHILE_SCORE)
     latam = ranked(lambda it: it["region"] == "latam" and it["topic"] in PREFERRED_TECH_TOPICS
                    and it["score"] >= MIN_LATAM_SCORE)
 
@@ -343,7 +452,9 @@ def select_tech(items, labels):
     mundo = ranked(lambda it: it["region"] != "chile" and it["topic"] in PREFERRED_TECH_TOPICS
                    and id(it) not in chosen)
     faltan = QUOTA_TECH_CHILE - len(chile[:QUOTA_TECH_CHILE])
-    tech_mundial = mundo[:QUOTA_TECH_MUNDIAL + faltan]
+    tech_mundial = mundo[:QUOTA_TECH_MUNDIAL]
+    tech_mundial += [it for it in mundo[QUOTA_TECH_MUNDIAL:QUOTA_TECH_MUNDIAL + faltan]
+                     if it["score"] >= MIN_FILL_SCORE]
 
     extras = {SECTION_CHILE: [], SECTION_MUNDO: []}
     for it in ranked(lambda it: it["topic"] in GENERAL_TECH_TOPICS and it["score"] >= 4):
@@ -386,10 +497,11 @@ def build_prompt(tech_chile, tech_mundial, general, extras):
 
 Genera un resumen diario para Telegram con estas reglas:
 - Usa las secciones tal cual (mismo emoji + nombre como encabezado en <b>negrita</b>), en el mismo orden. Omite una sección solo si no tiene noticias.
+- Cada noticia va en la sección donde aparece abajo. NUNCA muevas una noticia a otra sección, aunque por su contenido te parezca que encaja mejor en otra: la asignación ya está decidida.
 - {quota_note}
 - Cada noticia debe ir DESARROLLADA en 2-3 frases: qué pasó, el dato o detalle clave, y por qué importa o qué implica. Apóyate en el CONTEXTO provisto, no te quedes solo en el título. No inventes datos que no estén en el material.
 - Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y el link entre paréntesis al final.
-- IDIOMA: cada noticia se escribe en el idioma de su fuente: si el TÍTULO/CONTEXTO está en inglés, escríbela en inglés; si está en español, en español. No traduzcas. Los encabezados de sección van tal cual.
+- IDIOMA: cada noticia trae una etiqueta IDIOMA (inglés o español). Escribe el titular Y las frases de desarrollo de esa noticia exactamente en ese idioma. NUNCA traduzcas: una noticia marcada "inglés" va completa en inglés aunque las demás del resumen estén en español, y viceversa. Los encabezados de sección van tal cual.
 - Sé claro y sustancioso pero sin relleno. Empieza directo con la primera sección, sin introducción.
 - Usa SOLO formato HTML de Telegram: <b>negrita</b>. NADA de markdown (nada de ** ni ##).
 - Los links van como texto plano entre paréntesis, no como etiqueta <a>.
@@ -397,6 +509,8 @@ Genera un resumen diario para Telegram con estas reglas:
 
 Noticias crudas:
 {raw}
+
+Recordatorio final: respeta la etiqueta IDIOMA de cada noticia. Las marcadas "inglés" se escriben en inglés (titular y desarrollo); las marcadas "español", en español.
 """
 
 
@@ -497,6 +611,11 @@ def main():
         print(f"    🇨🇱 [{it['score']}/{it['topic']}] {it['title']}")
     for it in tech_mundial:
         print(f"    🌐 [{it['score']}/{it['topic']}] {it['title']}")
+
+    # Links de Google News: resolvemos solo los que van al resumen.
+    resolve_links(tech_chile + tech_mundial
+                  + [it for pool in extras.values() for it in pool]
+                  + [it for pool in general.values() for it in pool])
 
     print(f"Resumiendo con {MODEL}...")
     summary = summarize(client, build_prompt(tech_chile, tech_mundial, general, extras))
