@@ -32,3 +32,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         # En ejecuciones programadas inputs.dry_run es vacío, así que no se agrega el flag.
         run: python news_agent.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        # En ejecuciones programadas inputs.dry_run es vacío, así que no se agrega el flag.
+        run: python news_agent.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
