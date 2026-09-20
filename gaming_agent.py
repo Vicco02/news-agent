@@ -31,7 +31,7 @@ from news_agent import (
 # ------------------------------------------------------------------
 # Configuración
 # ------------------------------------------------------------------
-MAX_ITEMS_PER_FEED = 80        # una semana de un medio activo son 50-80 notas
+MAX_ITEMS_PER_FEED = 100       # Eurogamer o RPS publican 100+ notas por semana
 CLASSIFY_BATCH = 50            # noticias por llamada de clasificación
 MIN_SCORE = 3                  # bajo esto no se considera candidata
 MAX_CANDIDATES_PER_SECTION = 12  # cuántas candidatas ve el redactor por sección
@@ -42,7 +42,6 @@ MAX_CANDIDATES_PER_SECTION = 12  # cuántas candidatas ve el redactor por secci�
 FEEDS = [
     # Generalistas
     "https://www.eurogamer.net/feed",
-    "https://www.vg247.com/feed",
     "https://www.gematsu.com/feed",
     "https://kotaku.com/rss",
     "https://feeds.feedburner.com/ign/games-all",
@@ -80,15 +79,19 @@ SECTIONS = [
 # Ventana de tiempo
 # ------------------------------------------------------------------
 def week_window(days=None):
-    """Devuelve (inicio, fin) en hora de Chile. Por defecto: desde el lunes
-    de la semana pasada a las 00:00 hasta ahora (que un lunes es "el domingo
-    completo"). Con --days N, los últimos N días."""
+    """Devuelve (inicio, fin) en hora de Chile.
+    - Un lunes (la corrida programada): desde el lunes de la semana pasada
+      a las 00:00 hasta ahora, o sea la semana completa hasta el domingo.
+    - Cualquier otro día (corrida manual): desde el lunes de esta semana.
+    - Con --days N: los últimos N días."""
     now = datetime.now(CHILE_TZ)
     if days:
         return now - timedelta(days=days), now
     this_monday = (now - timedelta(days=now.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0)
-    return this_monday - timedelta(days=7), now
+    if now.weekday() == 0:
+        return this_monday - timedelta(days=7), now
+    return this_monday, now
 
 
 def collect(cutoff):
@@ -123,6 +126,7 @@ Para cada noticia devuelve:
   * 2: juego o estudio poco conocido, oferta menor, exclusivo de Xbox o móvil.
   * 1: ruido, clickbait, rumor, DUPLICADO. Si varias noticias tratan el MISMO hecho (aunque en distinto medio o idioma), deja score 1 en todas menos la más completa.
   * Lo exclusivo de Xbox o móvil no pasa de 2. Los rumores y filtraciones son "otro" con score 1.
+  * El jugador compra en las tiendas de Chile/Latinoamérica y EE.UU. Las ofertas, promociones o lanzamientos limitados a otras regiones (Sudeste Asiático, Japón, Reino Unido, Europa, etc.) son score 1.
 
 Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia en el mismo orden:
 [{"id": 1, "tipo": "lanzamiento", "plataforma": "multi", "score": 4}, ...]
@@ -192,6 +196,7 @@ def select(items):
 # Redacción
 # ------------------------------------------------------------------
 def build_prompt(chosen, start, end):
+    today = datetime.now(CHILE_TZ)
     raw = ""
     for title, _tipos, quota in SECTIONS:
         cands = chosen.get(title, [])
@@ -200,7 +205,7 @@ def build_prompt(chosen, start, end):
         raw += (f"\n## {title}\n(elige como máximo {quota}, las más relevantes; "
                 f"descarta el resto)\n{format_items(cands, with_link=True, with_lang=False)}\n")
 
-    return f"""Eres el editor de una newsletter semanal de videojuegos para un jugador de PlayStation, Nintendo y PC. Abajo tienes noticias crudas de RSS de la semana del {start:%d/%m} al {end:%d/%m}, agrupadas por sección. Cada una trae título, contexto (extracto de la nota) y link.
+    return f"""Eres el editor de una newsletter semanal de videojuegos para un jugador de PlayStation, Nintendo y PC. Hoy es {today:%d/%m/%Y}. Abajo tienes noticias crudas de RSS de la semana del {start:%d/%m} al {end:%d/%m}, agrupadas por sección. Cada una trae título, contexto (extracto de la nota) y link.
 
 Genera el resumen semanal para Telegram con estas reglas:
 - Usa las secciones tal cual (mismo emoji + nombre como encabezado en <b>negrita</b>), en el mismo orden. Omite una sección solo si no tiene noticias que valgan la pena.
@@ -208,7 +213,10 @@ Genera el resumen semanal para Telegram con estas reglas:
 - NUNCA repitas un hecho: si varias noticias cubren lo mismo (aunque estén en secciones distintas o en distinto idioma), escríbelo una sola vez usando la fuente más completa.
 - Cada noticia va en la sección donde aparece abajo; no muevas noticias entre secciones.
 - Cada noticia DESARROLLADA en 2-3 frases: qué pasó, el dato clave (fecha de lanzamiento, plataformas, precio o porcentaje de descuento, hasta cuándo dura la oferta, nota de reviews) y por qué importa. Apóyate en el CONTEXTO, no inventes datos que no estén en el material. Si una oferta o juego gratis tiene fecha límite y está en el material, dila.
-- Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y el link entre paréntesis al final.
+- Fechas: compara con la fecha de hoy. Si un juego sale después de hoy, di que "sale el X", nunca que "ya está disponible".
+- En 🛒 Ofertas y juegos gratis prioriza variedad: primero los juegos gratis (Epic, PS Plus, fines de semana gratis), después las ofertas, y no más de dos ofertas de la misma tienda. Si el material trae precios en euros o libras, no los repitas: da solo el porcentaje de descuento (el jugador compra en dólares o pesos chilenos).
+- Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y al final, entre paréntesis, el LINK COMPLETO tal cual aparece en el material (la URL entera que empieza con https://). Nunca pongas solo el dominio ni abrevies la URL. Si usaste varias fuentes, pon el link de la más completa.
+- No menciones ofertas ni promociones limitadas a otras regiones (Sudeste Asiático, Japón, Reino Unido, etc.): el jugador compra en tiendas de Chile/Latinoamérica y EE.UU.
 - IDIOMA: TODO en español, aunque la fuente esté en inglés. Traduce los titulares; los nombres de juegos, estudios y tiendas se dejan tal cual.
 - Sé claro y sustancioso pero sin relleno. Empieza directo con la primera sección, sin introducción.
 - Usa SOLO formato HTML de Telegram: <b>negrita</b>. NADA de markdown (nada de ** ni ##).
@@ -217,6 +225,8 @@ Genera el resumen semanal para Telegram con estas reglas:
 
 Noticias crudas:
 {raw}
+
+Recordatorio final: cada noticia termina con su URL completa entre paréntesis, copiada del campo LINK; todo en español; nada de ofertas de otras regiones.
 """
 
 
@@ -231,6 +241,8 @@ def main():
         sys.exit("Faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (o usa --dry-run).")
 
     start, end = week_window(args.days)
+    # Para el título: la semana termina el domingo aunque se corra el lunes.
+    label_end = end if args.days else min(end, start + timedelta(days=6))
     print(f"Recolectando noticias del {start:%d/%m %H:%M} al {end:%d/%m %H:%M} (Chile)...")
     items = collect(start.astimezone(timezone.utc))
     if not items:
@@ -253,9 +265,9 @@ def main():
     resolve_links([it for cands in chosen.values() for it in cands])
 
     print(f"Redactando con {MODEL}...")
-    summary = summarize(client, build_prompt(chosen, start, end))
+    summary = summarize(client, build_prompt(chosen, start, label_end))
 
-    header = f"🎮 Resumen gamer de la semana — {start:%d/%m} al {end:%d/%m}"
+    header = f"🎮 Resumen gamer de la semana — {start:%d/%m} al {label_end:%d/%m}"
     if args.dry_run:
         print("\n" + "=" * 60 + f"\n<b>{header}</b>\n\n" + summary + "\n" + "=" * 60)
         return
