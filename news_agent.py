@@ -364,7 +364,7 @@ CLASSIFY_PROMPT = """Eres un editor de tecnología. Clasifica cada noticia de la
 
 Para cada noticia devuelve:
 - "region": "chile" | "latam" | "global"
-  * "chile" SOLO si la noticia trata de algo chileno: empresa/startup chilena, producto o servicio lanzado en Chile o hecho por chilenos, decisión de una empresa o del Estado de Chile en tech, evento tech en Chile. Que el medio sea chileno NO la hace chilena: una nota de Pisapapeles sobre el nuevo iPhone es "global".
+  * "chile" SOLO si la noticia trata de algo chileno: empresa/startup chilena, producto o servicio lanzado en Chile o hecho por chilenos, decisión de una empresa o del Estado de Chile en tech, evento tech en Chile. La región es DÓNDE ocurre o impacta la noticia, no la nacionalidad de la empresa: una empresa extranjera (Rappi, Mercado Libre, Uber) que se expande, lanza algo o toma decisiones en Chile es "chile". Que el medio sea chileno NO la hace chilena: una nota de Pisapapeles sobre el nuevo iPhone es "global".
   * "latam" si trata de otro país de Latinoamérica.
   * "global" para todo lo demás.
 - "topic": "producto" | "ia" | "feature" | "empresa" | "finanzas" | "legal" | "otro"
@@ -491,6 +491,7 @@ def build_prompt(tech_chile, tech_mundial, general, extras):
 
 Genera un resumen diario para Telegram con estas reglas:
 - Usa las secciones tal cual (mismo emoji + nombre como encabezado en <b>negrita</b>), en el mismo orden. Omite una sección solo si no tiene noticias.
+- Cada noticia va en la sección donde aparece abajo. NUNCA muevas una noticia a otra sección, aunque por su contenido te parezca que encaja mejor en otra: la asignación ya está decidida.
 - {quota_note}
 - Cada noticia debe ir DESARROLLADA en 2-3 frases: qué pasó, el dato o detalle clave, y por qué importa o qué implica. Apóyate en el CONTEXTO provisto, no te quedes solo en el título. No inventes datos que no estén en el material.
 - Formato de cada noticia: el titular en <b>negrita</b>, seguido de las frases de desarrollo, y el link entre paréntesis al final.
