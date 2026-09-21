@@ -60,7 +60,7 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 3. En ~1 min deberías recibir el mensaje en Telegram.
 
 ## Personalización
-- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC. 11:00 UTC ≈ 08:00 Chile verano.
+- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC (12:07 UTC ≈ 09:07 Chile verano). GitHub ejecuta los crons con retraso, y a la hora en punto el atraso puede ser de horas: usa un minuto fuera de `:00` y espera que llegue unos minutos después de lo programado.
 - **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
 - **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
 - **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 4) exige que las noticias de esa sección sean de peso; si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). Baja `MIN_TECH_CHILE_SCORE` a 3 si prefieres la sección siempre llena.

@@ -2,8 +2,9 @@ name: Resumen semanal de videojuegos
 
 on:
   schedule:
-    # Lunes 11:00 UTC = 08:00 en Chile (horario de verano, UTC-3).
-    - cron: "0 11 * * 1"
+    # Lunes 12:07 UTC = 09:07 en Chile (horario de verano, UTC-3). Minuto
+    # fuera de la hora en punto porque GitHub atrasa mucho los crons ":00".
+    - cron: "7 12 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:
