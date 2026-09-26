@@ -9,7 +9,7 @@ Resumen automático cada mañana de tech mundial (inglés), tech Chile (inglés)
 4. **Redacta** el resumen con Claude y lo envía a Telegram.
 
 ## Resumen semanal de videojuegos 🎮
-Además del diario, `gaming_agent.py` manda los lunes a las 08:00 (Chile) un resumen de la semana anterior (lunes a domingo) para un jugador de PlayStation, Nintendo y PC. Usa los mismos secrets y el mismo chat.
+Además del diario, `gaming_agent.py` manda los lunes en la mañana (entre las 09:00 y las 10:00 de Chile, ver "Hora de envío") un resumen de la semana anterior (lunes a domingo) para un jugador de PlayStation, Nintendo y PC. Usa los mismos secrets y el mismo chat.
 
 1. Lee feeds de medios de videojuegos (Eurogamer, PC Gamer, Push Square, Nintendo Life, PlayStation Blog, Steam, etc.) y búsquedas de Google News en español para ofertas y juegos gratis.
 2. **Clasifica** cada noticia en lotes con Claude: tipo (`lanzamiento`, `actualizacion`, `review`, `oferta`, `gratis`, `hardware`, `industria`, `otro`), plataforma y relevancia 1-5. Lo exclusivo de Xbox o móvil, los rumores y las filtraciones quedan fuera.
@@ -60,10 +60,10 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 3. En ~1 min deberías recibir el mensaje en Telegram.
 
 ## Personalización
-- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC (12:07 UTC ≈ 09:07 Chile verano). GitHub ejecuta los crons con retraso, y a la hora en punto el atraso puede ser de horas: usa un minuto fuera de `:00` y espera que llegue unos minutos después de lo programado.
+- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC. GitHub ejecuta los crons de este repo con 4 a 5 horas de atraso de forma consistente, así que están programados unas 4 horas antes de la hora deseada: 08:07 UTC en horario de verano chileno (UTC-3, septiembre a abril) y 09:07 UTC en invierno (UTC-4, abril a septiembre), con dos entradas `cron` por meses. Así llegan entre las 09:00 y las 10:00 de Chile todo el año, salvo la semana del cambio de hora, en que pueden llegar una hora corridos. Si el atraso de GitHub cambia, mueve ambas horas.
 - **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
 - **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
-- **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 4) exige que las noticias de esa sección sean de peso; si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). Baja `MIN_TECH_CHILE_SCORE` a 3 si prefieres la sección siempre llena.
+- **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 3) filtra las noticias de esa sección; el clasificador puntúa lo chileno con la vara del ecosistema local y manda entrevistas y columnas a "otro". Si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). El log de cada corrida muestra cuántas noticias chilenas se detectaron y con qué scores.
 - **Idioma**: cada noticia se redacta en el idioma de su fuente (detectado automáticamente) y se le indica a Claude con una etiqueta `IDIOMA`. Las de TechCrunch/The Verge salen en inglés; las de medios chilenos, en español.
 - **Links de Google News**: los links de redirección (`news.google.com/rss/articles/...`) se convierten a la URL real de la nota antes de redactar. Si Google cambia el mecanismo, queda el link largo original y se avisa en el log.
 - **Qué temas tech entran**: `PREFERRED_TECH_TOPICS` (van a las secciones tech) y `GENERAL_TECH_TOPICS` (van a las generales si son relevantes).
