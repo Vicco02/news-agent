@@ -2,9 +2,9 @@ name: Resumen semanal de videojuegos
 
 on:
   schedule:
-    # Lunes 12:07 UTC = 09:07 en Chile (horario de verano, UTC-3). Minuto
-    # fuera de la hora en punto porque GitHub atrasa mucho los crons ":00".
-    - cron: "7 12 * * 1"
+    # Lunes 08:07 UTC. GitHub ejecuta los crons de este repo con 4-5 horas
+    # de atraso, así que llega entre las 09:00 y las 10:00 de Chile.
+    - cron: "7 8 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:

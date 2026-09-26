@@ -23,6 +23,7 @@ import html
 import json
 import time
 import base64
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse, quote
@@ -58,10 +59,11 @@ QUOTA_MUNDO_GENERAL = 2
 PREFERRED_TECH_TOPICS = {"producto", "ia", "feature", "empresa"}
 GENERAL_TECH_TOPICS = {"finanzas", "legal"}
 MIN_TECH_SCORE = 2                     # descarta ruido (score 1 = irrelevante/duplicado)
-# Tech Chile solo con noticias de peso: si no hay suficientes con este score,
-# el cupo que falte se rellena con tech mundial. Baja a 3 si prefieres que
-# Tech Chile salga siempre lleno aunque sean notas menores.
-MIN_TECH_CHILE_SCORE = 4
+# Score mínimo para Tech Chile. Con 4 la sección quedó vacía seis días
+# seguidos (el clasificador rara vez da 4 a una noticia chilena); con 3
+# entran los hechos locales y las entrevistas/columnas igual quedan fuera
+# porque se clasifican como "otro". El cupo que falte pasa a tech mundial.
+MIN_TECH_CHILE_SCORE = 3
 # Los cupos que Tech Chile no llena pasan a Tech mundial, pero solo con
 # noticias de al menos este score: mejor un resumen más corto que rellenar
 # con notas menores.
@@ -383,6 +385,7 @@ Para cada noticia devuelve:
   * legal: juicios, multas, regulación, antimonopolio, privacidad/legislación.
   * otro: tutoriales, opinión, entrevistas, columnas, notas panorámicas o de análisis general ("cinco claves de...", "qué esperar de..."), ofertas, ciencia general, gaming casual, ruido. Una entrevista o columna sobre IA es "otro", no "ia": las secciones tech son para HECHOS (lanzamientos, avances, movimientos de empresas).
 - "score": 1-5 importancia/relevancia para alguien que trabaja en tech y le interesan productos, IA, nuevas funciones y empresas. Usa 1 para clickbait, ofertas, tutoriales y para DUPLICADOS: si dos o más noticias tratan el MISMO hecho (aunque desde distinto ángulo o medio, p. ej. "startup X entra a Y Combinator" y "los chilenos que llegaron a Y Combinator"), deja score 1 en todas menos la más completa.
+  * Para las noticias con region "chile" la vara es el ecosistema chileno, no el mundial: el lector vive en Chile y quiere saber qué pasa en la tech local. Una ronda, un lanzamiento, una alianza o una expansión de una startup o empresa chilena (o de una extranjera operando en Chile) es score 3 si es un hecho concreto y 4-5 si es relevante dentro de Chile, aunque a escala global sea pequeña. Reserva el 2 para hechos menores o empresas sin trayectoria.
 
 Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia en el mismo orden:
 [{"id": 1, "region": "global", "topic": "ia", "score": 4}, ...]
@@ -433,6 +436,17 @@ def select_tech(items, labels):
     finanzas/legal relevantes que pueden entrar en las secciones generales."""
     for it, lab in zip(items, labels):
         it.update(lab)
+
+    # Diagnóstico: qué llegó de Chile y cómo se puntuó, para no adivinar
+    # cuando la sección salga vacía.
+    chile_all = [it for it in items if it["region"] == "chile"]
+    scores = Counter(it["score"] for it in chile_all)
+    topics = Counter(it["topic"] for it in chile_all)
+    print(f"  noticias chilenas detectadas: {len(chile_all)} | scores: "
+          + ", ".join(f"{s}:{n}" for s, n in sorted(scores.items(), reverse=True))
+          + " | temas: " + ", ".join(f"{t}:{n}" for t, n in topics.most_common()))
+    for it in sorted(chile_all, key=lambda it: -it["score"])[:6]:
+        print(f"    🇨🇱? [{it['score']}/{it['topic']}] {it['title'][:90]}")
 
     def ranked(pred):
         return sorted(

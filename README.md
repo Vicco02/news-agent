@@ -60,10 +60,10 @@ En el repo → **Settings → Secrets and variables → Actions → New reposito
 3. En ~1 min deberías recibir el mensaje en Telegram.
 
 ## Personalización
-- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC (12:07 UTC ≈ 09:07 Chile verano). GitHub ejecuta los crons con retraso, y a la hora en punto el atraso puede ser de horas: usa un minuto fuera de `:00` y espera que llegue unos minutos después de lo programado.
+- **Hora de envío**: edita el `cron` en `.github/workflows/daily.yml` (diario) o `weekly-gaming.yml` (semanal). Está en UTC. GitHub ejecuta los crons de este repo con 4 a 5 horas de atraso de forma consistente, así que están programados a las 08:07 UTC para que lleguen entre las 09:00 y las 10:00 de Chile. Si el atraso cambia, mueve la hora.
 - **Fuentes**: edita `TECH_FEEDS` (un solo pool; la región la decide el clasificador) y `GENERAL_FEEDS` en `news_agent.py`. Solo necesitas la URL del RSS. `google_news("consulta")` genera un feed de búsqueda de Google News Chile, útil para captar tech local por contenido.
 - **Cantidad por sección**: cambia `QUOTA_TECH_CHILE`, `QUOTA_TECH_MUNDIAL`, `QUOTA_CHILE_GENERAL`, `QUOTA_MUNDO_GENERAL`.
-- **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 4) exige que las noticias de esa sección sean de peso; si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). Baja `MIN_TECH_CHILE_SCORE` a 3 si prefieres la sección siempre llena.
+- **Calidad de Tech Chile**: `MIN_TECH_CHILE_SCORE` (por defecto 3) filtra las noticias de esa sección; el clasificador puntúa lo chileno con la vara del ecosistema local y manda entrevistas y columnas a "otro". Si no hay suficientes, el cupo que falte se rellena con tech mundial, pero solo con noticias de score ≥ `MIN_FILL_SCORE` (3). El log de cada corrida muestra cuántas noticias chilenas se detectaron y con qué scores.
 - **Idioma**: cada noticia se redacta en el idioma de su fuente (detectado automáticamente) y se le indica a Claude con una etiqueta `IDIOMA`. Las de TechCrunch/The Verge salen en inglés; las de medios chilenos, en español.
 - **Links de Google News**: los links de redirección (`news.google.com/rss/articles/...`) se convierten a la URL real de la nota antes de redactar. Si Google cambia el mecanismo, queda el link largo original y se avisa en el log.
 - **Qué temas tech entran**: `PREFERRED_TECH_TOPICS` (van a las secciones tech) y `GENERAL_TECH_TOPICS` (van a las generales si son relevantes).

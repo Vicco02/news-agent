@@ -2,11 +2,12 @@ name: Resumen diario de noticias
 
 on:
   schedule:
-    # cron en UTC. 12:07 UTC = 09:07 en Chile (horario de verano, UTC-3);
-    # en invierno (UTC-4) sería 08:07. GitHub ejecuta los crons con retraso:
-    # a la hora en punto (":00") llegaba horas tarde; con un minuto "raro"
-    # suele salir pocos minutos después de lo programado.
-    - cron: "7 12 * * *"
+    # cron en UTC. En este repo GitHub ejecuta los crons con 4-5 horas de
+    # atraso de forma consistente (programado a las 12:07 UTC salía a las
+    # 16:10-16:57). Se programa a las 08:07 UTC (05:07 Chile) para que
+    # aterrice entre las 09:00 y las 10:00 de Chile. Si el atraso cambia,
+    # ajusta la hora aquí.
+    - cron: "7 8 * * *"
   workflow_dispatch:   # permite ejecutarlo manualmente desde la pestaña Actions
     inputs:
       dry_run:
