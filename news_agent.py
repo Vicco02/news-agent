@@ -383,7 +383,7 @@ Para cada noticia devuelve:
     Rondas de inversión: son "empresa", pero dales score 4-5 SOLO si es una ronda grande o de una startup conocida; una ronda chica o de una startup desconocida es score 2.
   * finanzas: resultados trimestrales, acciones, valorización, despidos por costos, macro.
   * legal: juicios, multas, regulación, antimonopolio, privacidad/legislación.
-  * otro: tutoriales, opinión, entrevistas, columnas, notas panorámicas o de análisis general ("cinco claves de...", "qué esperar de..."), ofertas, ciencia general, gaming casual, ruido. Una entrevista o columna sobre IA es "otro", no "ia": las secciones tech son para HECHOS (lanzamientos, avances, movimientos de empresas).
+  * otro: tutoriales, opinión, entrevistas, columnas, notas panorámicas o de análisis general, listas y explicadores ("8 claves para entender...", "todo lo que debes saber de...", "qué esperar de..."), guías de compra, ofertas, ciencia general, gaming casual, ruido. Una entrevista o columna sobre IA es "otro", no "ia"; un explicador de un producto ya anunciado es "otro", no "producto": las secciones tech son para HECHOS (lanzamientos, avances, movimientos de empresas).
 - "score": 1-5 importancia/relevancia para alguien que trabaja en tech y le interesan productos, IA, nuevas funciones y empresas. Usa 1 para clickbait, ofertas, tutoriales y para DUPLICADOS: si dos o más noticias tratan el MISMO hecho (aunque desde distinto ángulo o medio, p. ej. "startup X entra a Y Combinator" y "los chilenos que llegaron a Y Combinator"), deja score 1 en todas menos la más completa.
   * Para las noticias con region "chile" la vara es el ecosistema chileno, no el mundial: el lector vive en Chile y quiere saber qué pasa en la tech local. Una ronda, un lanzamiento, una alianza o una expansión de una startup o empresa chilena (o de una extranjera operando en Chile) es score 3 si es un hecho concreto y 4-5 si es relevante dentro de Chile, aunque a escala global sea pequeña. Reserva el 2 para hechos menores o empresas sin trayectoria.
 
@@ -393,6 +393,10 @@ Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia 
 Noticias:
 {items}
 """
+
+
+VALID_REGIONS = {"chile", "latam", "global"}
+VALID_TOPICS = PREFERRED_TECH_TOPICS | GENERAL_TECH_TOPICS | {"otro"}
 
 
 def classify_tech(client, items):
@@ -422,9 +426,12 @@ def classify_tech(client, items):
     result = []
     for i in range(1, len(items) + 1):
         d = by_id.get(i, {})
+        region = str(d.get("region", "global")).lower()
+        topic = str(d.get("topic", "otro")).lower()
         result.append({
-            "region": str(d.get("region", "global")).lower(),
-            "topic": str(d.get("topic", "otro")).lower(),
+            "region": region if region in VALID_REGIONS else "global",
+            # Haiku a veces inventa etiquetas ("outro"); lo desconocido es "otro".
+            "topic": topic if topic in VALID_TOPICS else "otro",
             "score": int(d.get("score", 3) or 3),
         })
     return result
