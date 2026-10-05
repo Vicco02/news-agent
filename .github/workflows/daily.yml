@@ -32,6 +32,16 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
+      # Memoria de hallazgos IA ya enviados, para no repetirlos entre días.
+      # Cada corrida guarda un cache nuevo y la siguiente restaura el más
+      # reciente por prefijo. Si se pierde, a lo más se repite un hallazgo.
+      - name: Restaurar memoria de hallazgos IA
+        uses: actions/cache/restore@v4
+        with:
+          path: hallazgos_enviados.json
+          key: hallazgos-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: hallazgos-
+
       - name: Ejecutar agente
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -39,3 +49,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         # En ejecuciones programadas inputs.dry_run es vacío, así que no se agrega el flag.
         run: python news_agent.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
+
+      - name: Guardar memoria de hallazgos IA
+        if: hashFiles('hallazgos_enviados.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: hallazgos_enviados.json
+          key: hallazgos-${{ github.run_id }}-${{ github.run_attempt }}

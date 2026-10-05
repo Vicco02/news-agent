@@ -6,3 +6,6 @@ venv/
 
 # Secretos locales
 .env
+
+# Memoria de hallazgos IA (en Actions vive en actions/cache)
+hallazgos_enviados.json

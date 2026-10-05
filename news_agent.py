@@ -9,7 +9,9 @@ Pipeline:
      qué medio la publicó.
   3. Selecciona con cupos fijos por sección (si falta tech chileno, se
      compensa con más tech mundial).
-  4. Redacta el resumen con Claude y lo envía a Telegram.
+  4. Busca hallazgos IA (herramientas y proyectos populares hechos con IA)
+     en un pool aparte; la sección solo aparece si algo pasa la vara.
+  5. Redacta el resumen con Claude y lo envía a Telegram.
 
 Uso:
   python news_agent.py            # corre completo y envía a Telegram
@@ -68,6 +70,17 @@ MIN_TECH_CHILE_SCORE = 3
 # noticias de al menos este score: mejor un resumen más corto que rellenar
 # con notas menores.
 MIN_FILL_SCORE = 3
+
+# Hallazgos IA: herramientas, skills y proyectos hechos con IA que se están
+# volviendo populares. Es una sección ocasional: solo aparece cuando algo
+# pasa la vara, así que la mayoría de los días no sale.
+QUOTA_HALLAZGOS = 2
+MIN_HALLAZGO_SCORE = 4
+# Lo ya enviado se recuerda para no repetir un repo que sigue en Trending
+# varios días. En GitHub Actions el archivo persiste vía actions/cache.
+HALLAZGOS_MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "hallazgos_enviados.json")
+HALLAZGOS_MEMORY_DAYS = 21
 
 # Zona horaria Chile (UTC-3 en horario de verano, -4 invierno). Usamos -3 fijo para simplicidad.
 CHILE_TZ = timezone(timedelta(hours=-3))
@@ -128,10 +141,30 @@ GENERAL_FEEDS = {
     ],
 }
 
+# Fuentes de hallazgos IA: donde aparecen primero las herramientas y proyectos
+# que la gente construye (no los anuncios de empresas, que ya van en tech).
+# Pool aparte para que el ruido de GitHub/Reddit no entre en Tech mundial.
+AI_FEEDS = [
+    # GitHub Trending diario (RSS no oficial): skills, agentes, herramientas.
+    "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
+    # Show HN con tracción y lo más votado de HN sobre IA.
+    "https://hnrss.org/show?points=100",
+    "https://hnrss.org/newest?q=AI+OR+LLM+OR+Claude+OR+GPT+OR+agent&points=200",
+    # Reddit a veces bloquea a GitHub Actions (429/403); si falla, se salta.
+    "https://www.reddit.com/r/LocalLLaMA/top/.rss?t=day",
+]
+
+# Nombres legibles para fuentes cuyo dominio no dice nada.
+SOURCE_NAMES = {
+    "mshibanami.github.io": "GitHub Trending",
+    "hnrss.org": "Hacker News",
+}
+
 SECTION_TECH_MUNDIAL = "🌐 Tech mundial"
 SECTION_TECH_CHILE = "🇨🇱 Tech Chile (+ Latam)"
 SECTION_CHILE = "🇨🇱 Chile"
 SECTION_MUNDO = "🗞️ Mundo"
+SECTION_HALLAZGOS = "🧪 Hallazgos IA"
 
 
 # ------------------------------------------------------------------
@@ -179,7 +212,8 @@ def source_name(entry, feed_url):
     src = getattr(entry, "source", None)
     if src and getattr(src, "title", None):
         return src.title
-    return urlparse(feed_url).netloc.replace("www.", "")
+    domain = urlparse(feed_url).netloc.replace("www.", "")
+    return SOURCE_NAMES.get(domain, domain)
 
 
 # Palabras muy frecuentes de cada idioma; basta contar cuáles aparecen más.
@@ -305,6 +339,12 @@ def fetch_feed(url, cutoff, max_items=None):
             # Google News pone " - Medio" al final del título; lo quitamos.
             title = re.sub(r"\s+-\s+[^-]+$", "", title)
         desc = clean_description(entry)
+        if "hnrss.org" in url:
+            # Los puntos vienen al final del summary y el recorte los pierde;
+            # van al inicio porque son la mejor señal de popularidad.
+            m = re.search(r"Points:\s*(\d+)", getattr(entry, "summary", "") or "")
+            if m:
+                desc = f"[{m.group(1)} puntos en HN] {desc}"
         items.append({
             "title": title,
             "link": getattr(entry, "link", ""),
@@ -345,7 +385,13 @@ def collect_news():
         general[section] = dedup(items)
         print(f"  {section}: {len(general[section])} noticias")
 
-    return tech, general
+    ai = []
+    for url in AI_FEEDS:
+        ai.extend(fetch_feed(url, cutoff))
+    ai = dedup(ai)
+    print(f"  hallazgos IA (pool): {len(ai)} candidatos")
+
+    return tech, general, ai
 
 
 # ------------------------------------------------------------------
@@ -399,12 +445,9 @@ VALID_REGIONS = {"chile", "latam", "global"}
 VALID_TOPICS = PREFERRED_TECH_TOPICS | GENERAL_TECH_TOPICS | {"otro"}
 
 
-def classify_tech(client, items):
-    """Devuelve una lista de dicts {region, topic, score} alineada con items.
-    Si algo falla, devuelve None y el llamador usa un fallback."""
-    if not items:
-        return []
-    prompt = CLASSIFY_PROMPT.replace("{items}", format_items(items))
+def _classify(client, prompt):
+    """Pide a Claude un array JSON de etiquetas con "id" y lo devuelve como
+    {id: dict}. Si la respuesta no se puede parsear, devuelve None."""
     resp = client.messages.create(
         model=MODEL,
         max_tokens=4000,
@@ -423,6 +466,17 @@ def classify_tech(client, items):
             by_id[int(d["id"])] = d
         except (KeyError, TypeError, ValueError):
             continue
+    return by_id
+
+
+def classify_tech(client, items):
+    """Devuelve una lista de dicts {region, topic, score} alineada con items.
+    Si algo falla, devuelve None y el llamador usa un fallback."""
+    if not items:
+        return []
+    by_id = _classify(client, CLASSIFY_PROMPT.replace("{items}", format_items(items)))
+    if by_id is None:
+        return None
     result = []
     for i in range(1, len(items) + 1):
         d = by_id.get(i, {})
@@ -492,9 +546,108 @@ def select_tech(items, labels):
 
 
 # ------------------------------------------------------------------
+# Hallazgos IA (sección ocasional)
+# ------------------------------------------------------------------
+HALLAZGOS_PROMPT = """Eres un curador de novedades de inteligencia artificial. El lector trabaja en tech y quiere enterarse, de vez en cuando, de las cosas nuevas que la gente está HACIENDO con IA: herramientas, skills y plugins para agentes (Claude Code, Codex, Cursor...), agentes open source, apps, mods y proyectos que muestran algo que antes no se podía hacer. Ejemplos del tipo de cosa que busca: OpenClaw cuando apareció, o la herramienta con IA que permitió descomprimir y mezclar juegos para meter Minecraft dentro de Skyrim.
+
+Para cada noticia devuelve:
+- "hallazgo": true si es algo CONCRETO que se puede usar, probar o ver: una herramienta, repo, skill, agente, app, mod, demo o proyecto hecho con IA o para IA. false para: anuncios de modelos o de grandes empresas ("OpenAI lanza X"), financiamiento, política, regulación, seguridad e incidentes, opinión, debates, preguntas, quejas, memes, benchmarks, papers sin herramienta usable, y proyectos que no tienen que ver con IA.
+- "score": 1-5, qué tanto vale la pena enterarse:
+  * 5: se está volviendo viral o abre una posibilidad realmente nueva; se va a hablar de esto por semanas.
+  * 4: popular y útil o sorprendente; vale la pena probarlo o conocerlo.
+  * 3: interesante pero de nicho, o una variación más de algo que ya existe.
+  * 1-2: menor, demasiado específico, o DUPLICADO.
+  Señales de popularidad: los puntos de Hacker News cuando aparecen ("[N puntos en HN]"; 300 o más es mucho) y que aparecer en GitHub Trending ya indica tracción. Sé exigente: la mayoría de los días NINGUNA noticia debería tener 4 o más.
+  DUPLICADOS: si varias noticias tratan del mismo proyecto, deja score 1 en todas menos la más completa. También score 1 si el proyecto ya está en la lista YA ENVIADOS, aunque cambie el título o la fuente.
+
+YA ENVIADOS (días anteriores):
+{sent}
+
+Responde SOLO con un array JSON, sin texto adicional, con un objeto por noticia en el mismo orden:
+[{"id": 1, "hallazgo": true, "score": 4}, ...]
+
+Noticias:
+{items}
+"""
+
+
+def _link_key(link):
+    return link.strip().rstrip("/").lower()
+
+
+def load_hallazgos_memory():
+    """Hallazgos enviados en los últimos HALLAZGOS_MEMORY_DAYS días:
+    [{title, link, date}]. Sin archivo (primera vez o cache perdido) es []."""
+    try:
+        with open(HALLAZGOS_MEMORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        print(f"  ! No pude leer {HALLAZGOS_MEMORY_FILE} ({e}); empiezo sin memoria",
+              file=sys.stderr)
+        return []
+    since = (datetime.now(CHILE_TZ) - timedelta(days=HALLAZGOS_MEMORY_DAYS)).date().isoformat()
+    return [d for d in data if isinstance(d, dict) and d.get("date", "") >= since]
+
+
+def save_hallazgos_memory(memory, sent):
+    today = datetime.now(CHILE_TZ).date().isoformat()
+    memory = memory + [{"title": it["title"], "link": it["link"], "date": today}
+                       for it in sent]
+    with open(HALLAZGOS_MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, ensure_ascii=False, indent=1)
+
+
+def classify_hallazgos(client, items, memory):
+    """Devuelve una lista de dicts {hallazgo, score} alineada con items, o
+    None si la clasificación falla."""
+    if not items:
+        return []
+    sent = "\n".join(f"- {d['title']}" for d in memory) or "(ninguno)"
+    prompt = (HALLAZGOS_PROMPT.replace("{sent}", sent)
+              .replace("{items}", format_items(items)))
+    by_id = _classify(client, prompt)
+    if by_id is None:
+        return None
+    result = []
+    for i in range(1, len(items) + 1):
+        d = by_id.get(i, {})
+        try:
+            score = int(d.get("score", 1) or 1)
+        except (TypeError, ValueError):
+            score = 1
+        result.append({"hallazgo": str(d.get("hallazgo")).lower() == "true", "score": score})
+    return result
+
+
+def select_hallazgos(items, labels, memory, taken):
+    """Hasta QUOTA_HALLAZGOS hallazgos con score >= MIN_HALLAZGO_SCORE que no
+    se hayan enviado antes ni estén ya en las secciones tech (taken)."""
+    sent_links = {_link_key(d.get("link", "")) for d in memory}
+    taken_links = {_link_key(it["link"]) for it in taken}
+    taken_titles = {it["title"].lower() for it in taken}
+    candidates = []
+    for it, lab in zip(items, labels):
+        if not lab["hallazgo"]:
+            continue
+        it = {**it, "score": lab["score"]}
+        key = _link_key(it["link"])
+        if key in sent_links or key in taken_links or it["title"].lower() in taken_titles:
+            continue
+        candidates.append(it)
+    candidates.sort(key=lambda it: -it["score"])
+    # Log de calibración: si la sección sale muy seguido o nunca, mira aquí.
+    print(f"  hallazgos candidatos: {len(candidates)} (vara: score >= {MIN_HALLAZGO_SCORE})")
+    for it in candidates[:6]:
+        print(f"    🧪? [{it['score']}] {it['title'][:90]} ({it['source']})")
+    return [it for it in candidates if it["score"] >= MIN_HALLAZGO_SCORE][:QUOTA_HALLAZGOS]
+
+
+# ------------------------------------------------------------------
 # Resumen con Claude
 # ------------------------------------------------------------------
-def build_prompt(tech_chile, tech_mundial, general, extras):
+def build_prompt(tech_chile, tech_mundial, general, extras, hallazgos):
     def block(title, items, instruction):
         if not items:
             return ""
@@ -503,6 +656,10 @@ def build_prompt(tech_chile, tech_mundial, general, extras):
     fixed = "escribe TODAS estas noticias, en este orden; ya están seleccionadas"
     raw = block(SECTION_TECH_CHILE, tech_chile, fixed)
     raw += block(SECTION_TECH_MUNDIAL, tech_mundial, fixed)
+    raw += block(SECTION_HALLAZGOS, hallazgos,
+                 fixed + "; para cada una explica qué es, qué se puede hacer con ella "
+                 "y, si el CONTEXTO lo dice, qué tan popular está (puntos en Hacker "
+                 "News, GitHub Trending)")
 
     for section, quota in ((SECTION_CHILE, QUOTA_CHILE_GENERAL),
                            (SECTION_MUNDO, QUOTA_MUNDO_GENERAL)):
@@ -613,7 +770,7 @@ def main():
         sys.exit("Faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (o usa --dry-run).")
 
     print("Recolectando noticias...")
-    tech, general = collect_news()
+    tech, general, ai = collect_news()
     total = len(tech) + sum(len(v) for v in general.values())
     if total == 0:
         print("No se encontraron noticias. Saliendo.")
@@ -636,19 +793,38 @@ def main():
     for it in tech_mundial:
         print(f"    🌐 [{it['score']}/{it['topic']}] {it['title']}")
 
+    # Hallazgos IA: sección opcional; si algo falla, el resumen sale sin ella.
+    memory = load_hallazgos_memory()
+    hallazgos = []
+    print(f"Clasificando {len(ai)} candidatos a hallazgos IA "
+          f"({len(memory)} enviados en los últimos {HALLAZGOS_MEMORY_DAYS} días)...")
+    try:
+        ai_labels = classify_hallazgos(client, ai, memory)
+    except anthropic.APIError as e:
+        print(f"  ! Clasificación de hallazgos falló ({e}); sin sección.", file=sys.stderr)
+        ai_labels = None
+    if ai_labels is not None:
+        hallazgos = select_hallazgos(ai, ai_labels, memory, tech_chile + tech_mundial)
+    for it in hallazgos:
+        print(f"    🧪 [{it['score']}] {it['title']}")
+
     # Links de Google News: resolvemos solo los que van al resumen.
     resolve_links(tech_chile + tech_mundial
                   + [it for pool in extras.values() for it in pool]
                   + [it for pool in general.values() for it in pool])
 
     print(f"Resumiendo con {MODEL}...")
-    summary = summarize(client, build_prompt(tech_chile, tech_mundial, general, extras))
+    summary = summarize(client, build_prompt(tech_chile, tech_mundial, general, extras,
+                                             hallazgos))
 
     if dry_run:
         print("\n" + "=" * 60 + "\n" + summary + "\n" + "=" * 60)
         return
     print("Enviando a Telegram...")
     send_telegram(summary)
+    # Se recuerda solo después de enviar: un dry run no "gasta" un hallazgo.
+    if hallazgos:
+        save_hallazgos_memory(memory, hallazgos)
     print("Listo ✅")
 
 
