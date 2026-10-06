@@ -76,8 +76,8 @@ MIN_FILL_SCORE = 3
 # pasa la vara, así que la mayoría de los días no sale.
 QUOTA_HALLAZGOS = 2
 MIN_HALLAZGO_SCORE = 4
-# Lo ya enviado se recuerda para no repetir un repo que sigue en Trending
-# varios días. En GitHub Actions el archivo persiste vía actions/cache.
+# Lo ya enviado se recuerda para no repetir un repo que sigue entre los más
+# estrellados varios días. En GitHub Actions el archivo persiste vía actions/cache.
 HALLAZGOS_MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "hallazgos_enviados.json")
 HALLAZGOS_MEMORY_DAYS = 21
@@ -143,20 +143,26 @@ GENERAL_FEEDS = {
 
 # Fuentes de hallazgos IA: donde aparecen primero las herramientas y proyectos
 # que la gente construye (no los anuncios de empresas, que ya van en tech).
-# Pool aparte para que el ruido de GitHub/Reddit no entre en Tech mundial.
-AI_FEEDS = [
-    # GitHub Trending diario (RSS no oficial): skills, agentes, herramientas.
-    "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
-    # Show HN con tracción y lo más votado de HN sobre IA.
-    "https://hnrss.org/show?points=100",
-    "https://hnrss.org/newest?q=AI+OR+LLM+OR+Claude+OR+GPT+OR+agent&points=200",
-    # Reddit a veces bloquea a GitHub Actions (429/403); si falla, se salta.
-    "https://www.reddit.com/r/LocalLLaMA/top/.rss?t=day",
+# Pool aparte para que este ruido no entre en Tech mundial. Cada candidato
+# trae un número de popularidad (estrellas o puntos): sin eso, Haiku le da 4
+# a cualquier repo de GitHub Trending y la sección saldría todos los días.
+
+# Repos de GitHub creados en los últimos días, ordenados por estrellas: ahí
+# aparecen las skills, agentes y herramientas que están explotando.
+GITHUB_NEW_DAYS = 14
+GITHUB_MIN_STARS = 500
+
+# Hacker News vía la API de búsqueda de Algolia (los feeds filtrados de hnrss
+# devuelven 502 a ratos). Sin filtrar por palabras: lo muy votado que no tiene
+# que ver con IA lo descarta el clasificador. Los puntos son la mejor señal de
+# popularidad que tenemos.
+HN_SEARCHES = [
+    {"tags": "show_hn", "min_points": 100},
+    {"tags": "story", "min_points": 200},
 ]
 
 # Nombres legibles para fuentes cuyo dominio no dice nada.
 SOURCE_NAMES = {
-    "mshibanami.github.io": "GitHub Trending",
     "hnrss.org": "Hacker News",
 }
 
@@ -358,6 +364,84 @@ def fetch_feed(url, cutoff, max_items=None):
     return items
 
 
+def fetch_github_new():
+    """Repos creados en los últimos GITHUB_NEW_DAYS días con al menos
+    GITHUB_MIN_STARS estrellas, de más a menos estrellas."""
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=GITHUB_NEW_DAYS)).date().isoformat()
+    headers = {**UA_HEADERS, "Accept": "application/vnd.github+json"}
+    # Sin token la búsqueda permite 10 consultas/min por IP, compartida en Actions.
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    params = {
+        "q": f"created:>={since} stars:>={GITHUB_MIN_STARS}",
+        "sort": "stars",
+        "order": "desc",
+        "per_page": 30,
+    }
+    try:
+        resp = requests.get("https://api.github.com/search/repositories",
+                            params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        repos = resp.json()["items"]
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"  ! Error leyendo repos nuevos de GitHub: {e}", file=sys.stderr)
+        return []
+    items = []
+    for r in repos:
+        desc = (r.get("description") or "").strip()[:MAX_DESC_CHARS]
+        try:
+            created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+            age = max(1, (now - created).days)
+        except (KeyError, ValueError):
+            age = GITHUB_NEW_DAYS
+        items.append({
+            "title": r["full_name"],
+            "link": r["html_url"],
+            "desc": f"[{r['stargazers_count']} estrellas en GitHub en {age} días] {desc}",
+            "source": "GitHub",
+            "lang": detect_lang(f"{r['full_name']} {desc}"),
+        })
+    print(f"  GitHub (repos de {GITHUB_NEW_DAYS} días, >= {GITHUB_MIN_STARS} estrellas): "
+          f"{len(items)} repos")
+    return items
+
+
+def fetch_hn(cutoff, tags, min_points):
+    """Historias de HN publicadas desde cutoff con al menos min_points."""
+    url = "https://hn.algolia.com/api/v1/search"
+    params = {
+        "tags": tags,
+        "numericFilters": f"points>={min_points},created_at_i>{int(cutoff.timestamp())}",
+        "hitsPerPage": 50,
+    }
+    try:
+        resp = requests.get(url, params=params, headers=UA_HEADERS, timeout=15)
+        resp.raise_for_status()
+        hits = resp.json()["hits"]
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"  ! Error leyendo HN ({tags}, >= {min_points} puntos): {e}", file=sys.stderr)
+        return []
+    items = []
+    for h in hits:
+        title = (h.get("title") or "").strip()
+        if not title:
+            continue
+        text = re.sub(r"<[^>]+>", " ", html.unescape(h.get("story_text") or ""))
+        text = re.sub(r"\s+", " ", text).strip()[:MAX_DESC_CHARS]
+        points = int(h.get("points") or 0)
+        desc = f"[{points} puntos en HN, {h.get('num_comments') or 0} comentarios] {text}"
+        items.append({
+            "title": title,
+            "link": h.get("url") or f"https://news.ycombinator.com/item?id={h['objectID']}",
+            "desc": desc.strip(),
+            "source": "Hacker News",
+            "lang": detect_lang(f"{title} {text}"),
+        })
+    print(f"  HN ({tags}, >= {min_points} puntos): {len(items)} historias")
+    return items
+
+
 def dedup(items):
     seen, unique = set(), []
     for it in items:
@@ -385,9 +469,9 @@ def collect_news():
         general[section] = dedup(items)
         print(f"  {section}: {len(general[section])} noticias")
 
-    ai = []
-    for url in AI_FEEDS:
-        ai.extend(fetch_feed(url, cutoff))
+    ai = fetch_github_new()
+    for search in HN_SEARCHES:
+        ai.extend(fetch_hn(cutoff, **search))
     ai = dedup(ai)
     print(f"  hallazgos IA (pool): {len(ai)} candidatos")
 
@@ -557,7 +641,10 @@ Para cada noticia devuelve:
   * 4: popular y útil o sorprendente; vale la pena probarlo o conocerlo.
   * 3: interesante pero de nicho, o una variación más de algo que ya existe.
   * 1-2: menor, demasiado específico, o DUPLICADO.
-  Señales de popularidad: los puntos de Hacker News cuando aparecen ("[N puntos en HN]"; 300 o más es mucho) y que aparecer en GitHub Trending ya indica tracción. Sé exigente: la mayoría de los días NINGUNA noticia debería tener 4 o más.
+  Señales de popularidad (cada noticia trae una entre corchetes):
+  * "[N estrellas en GitHub en D días]": repo nuevo. Mira el ritmo: 1000 o más en una o dos semanas es mucho; 3000 o más es viral.
+  * "[N puntos en HN, M comentarios]": 300 o más puntos es mucho; 600 o más es viral.
+  Sé exigente: la mayoría de los días NINGUNA noticia debería tener 4 o más.
   DUPLICADOS: si varias noticias tratan del mismo proyecto, deja score 1 en todas menos la más completa. También score 1 si el proyecto ya está en la lista YA ENVIADOS, aunque cambie el título o la fuente.
 
 YA ENVIADOS (días anteriores):
@@ -658,8 +745,8 @@ def build_prompt(tech_chile, tech_mundial, general, extras, hallazgos):
     raw += block(SECTION_TECH_MUNDIAL, tech_mundial, fixed)
     raw += block(SECTION_HALLAZGOS, hallazgos,
                  fixed + "; para cada una explica qué es, qué se puede hacer con ella "
-                 "y, si el CONTEXTO lo dice, qué tan popular está (puntos en Hacker "
-                 "News, GitHub Trending)")
+                 "y qué tan popular está (estrellas en GitHub o puntos en Hacker News, "
+                 "según el CONTEXTO)")
 
     for section, quota in ((SECTION_CHILE, QUOTA_CHILE_GENERAL),
                            (SECTION_MUNDO, QUOTA_MUNDO_GENERAL)):
