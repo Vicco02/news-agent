@@ -1,15 +1,17 @@
 name: Resumen diario de noticias
 
 on:
+  # Disparo principal: un cron externo (cron-job.org) llama a la API de
+  # GitHub a las 09:00 de Chile con event_type "resumen-diario". Los
+  # repository_dispatch parten en segundos; los crons de GitHub en este repo
+  # salen con 5 a 9 horas de atraso. Ver "Hora de envío" en el README.
+  repository_dispatch:
+    types: [resumen-diario]
   schedule:
-    # cron en UTC. En este repo GitHub ejecuta los crons con 4-5 horas de
-    # atraso de forma consistente (programado a las 12:07 UTC salía a las
-    # 16:10-16:57), así que se programa ~4 horas antes de la hora deseada
-    # para aterrizar entre las 09:00 y las 10:00 de Chile. Dos entradas
-    # para compensar el horario chileno: verano (UTC-3, sep-abr) a las
-    # 08:07 UTC e invierno (UTC-4, abr-sep) a las 09:07 UTC. Los cambios
-    # de hora caen a principios de abril y de septiembre, así que esas
-    # semanas puede llegar una hora corrida. Si el atraso cambia, ajusta.
+    # Respaldo por si el disparo externo falla: si ese ya envió el resumen
+    # hoy, el job "ya-enviado" lo detecta y esta corrida no hace nada. Con el
+    # atraso de GitHub llega a mediodía. Verano (UTC-3, sep-abr) 08:07 UTC,
+    # invierno (UTC-4, abr-sep) 09:07 UTC.
     - cron: "7 8 * 1-3,9-12 *"
     - cron: "7 9 * 4-8 *"
   workflow_dispatch:   # permite ejecutarlo manualmente desde la pestaña Actions
@@ -20,7 +22,30 @@ on:
         default: false
 
 jobs:
+  ya-enviado:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      enviado: ${{ steps.check.outputs.enviado }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Medianoche de hoy en Chile, en UTC.
+          desde=$(date -u -d "@$(TZ=America/Santiago date -d 'today 00:00' +%s)" +%FT%TZ)
+          n=$(gh run list -R "$GITHUB_REPOSITORY" -w daily.yml -e repository_dispatch \
+                -s success --created ">=$desde" --json databaseId -q length)
+          echo "Corridas del disparo externo desde $desde: $n"
+          echo "enviado=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   run:
+    needs: ya-enviado
+    # Corre si no es el cron de respaldo o si hoy no se envió nada. Si la
+    # verificación falla, corre igual: mejor un resumen repetido que ninguno.
+    if: ${{ !cancelled() && needs.ya-enviado.outputs.enviado != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -32,15 +57,24 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      # Memoria de hallazgos IA ya enviados, para no repetirlos entre días.
-      # Cada corrida guarda un cache nuevo y la siguiente restaura el más
-      # reciente por prefijo. Si se pierde, a lo más se repite un hallazgo.
+      # Memoria de lo ya enviado, para no repetirlo entre días: hallazgos IA
+      # (21 días) y noticias tech (3 días). Cada corrida guarda un cache nuevo
+      # y la siguiente restaura el más reciente por prefijo. Si se pierde, a lo
+      # más se repite algo un día. Van en caches separados porque la versión
+      # del cache depende de las rutas: juntarlas perdería la memoria actual.
       - name: Restaurar memoria de hallazgos IA
         uses: actions/cache/restore@v4
         with:
           path: hallazgos_enviados.json
           key: hallazgos-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: hallazgos-
+
+      - name: Restaurar memoria de noticias
+        uses: actions/cache/restore@v4
+        with:
+          path: noticias_enviadas.json
+          key: noticias-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: noticias-
 
       - name: Ejecutar agente
         env:
@@ -49,7 +83,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Sube el límite de la búsqueda de GitHub (hallazgos IA).
           GITHUB_TOKEN: ${{ github.token }}
-        # En ejecuciones programadas inputs.dry_run es vacío, así que no se agrega el flag.
+        # Fuera de workflow_dispatch inputs.dry_run es vacío, así que no se agrega el flag.
         run: python news_agent.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
 
       - name: Guardar memoria de hallazgos IA
@@ -58,3 +92,10 @@ jobs:
         with:
           path: hallazgos_enviados.json
           key: hallazgos-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Guardar memoria de noticias
+        if: hashFiles('noticias_enviadas.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: noticias_enviadas.json
+          key: noticias-${{ github.run_id }}-${{ github.run_attempt }}

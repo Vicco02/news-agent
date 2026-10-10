@@ -1,11 +1,14 @@
 name: Resumen semanal de videojuegos
 
 on:
+  # Disparo principal: cron externo los lunes a las 09:00 de Chile con
+  # event_type "resumen-semanal". Mismo esquema que daily.yml.
+  repository_dispatch:
+    types: [resumen-semanal]
   schedule:
-    # Lunes. GitHub ejecuta los crons de este repo con 4-5 horas de atraso,
-    # así que se programa ~4 horas antes para llegar entre las 09:00 y las
-    # 10:00 de Chile: verano (UTC-3, sep-abr) 08:07 UTC, invierno (UTC-4,
-    # abr-sep) 09:07 UTC. Mismo criterio que daily.yml.
+    # Lunes, respaldo por si el disparo externo falla (si ya envió, no hace
+    # nada). Verano (UTC-3, sep-abr) 08:07 UTC, invierno (UTC-4, abr-sep)
+    # 09:07 UTC.
     - cron: "7 8 * 1-3,9-12 1"
     - cron: "7 9 * 4-8 1"
   workflow_dispatch:
@@ -20,7 +23,29 @@ on:
         default: ""
 
 jobs:
+  ya-enviado:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      enviado: ${{ steps.check.outputs.enviado }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Medianoche de hoy en Chile, en UTC.
+          desde=$(date -u -d "@$(TZ=America/Santiago date -d 'today 00:00' +%s)" +%FT%TZ)
+          n=$(gh run list -R "$GITHUB_REPOSITORY" -w weekly-gaming.yml -e repository_dispatch \
+                -s success --created ">=$desde" --json databaseId -q length)
+          echo "Corridas del disparo externo desde $desde: $n"
+          echo "enviado=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   run:
+    needs: ya-enviado
+    # Corre si no es el cron de respaldo o si hoy no se envió nada.
+    if: ${{ !cancelled() && needs.ya-enviado.outputs.enviado != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
