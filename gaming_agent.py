@@ -268,8 +268,9 @@ def main():
     summary = summarize(client, build_prompt(chosen, start, label_end))
 
     header = f"🎮 Resumen gamer de la semana — {start:%d/%m} al {label_end:%d/%m}"
+    # Siempre al log, para poder revisar después qué se envió.
+    print("\n" + "=" * 60 + f"\n<b>{header}</b>\n\n" + summary + "\n" + "=" * 60)
     if args.dry_run:
-        print("\n" + "=" * 60 + f"\n<b>{header}</b>\n\n" + summary + "\n" + "=" * 60)
         return
     print("Enviando a Telegram...")
     send_telegram(summary, header=header)

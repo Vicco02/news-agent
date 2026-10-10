@@ -82,6 +82,13 @@ HALLAZGOS_MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "hallazgos_enviados.json")
 HALLAZGOS_MEMORY_DAYS = 21
 
+# Noticias tech ya enviadas: la ventana de 36 horas se traslapa con la del
+# día anterior, así que sin esto un mismo hecho sale dos días seguidos (a
+# veces con otro titular o en otro idioma). Persiste igual que la de hallazgos.
+NEWS_MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "noticias_enviadas.json")
+NEWS_MEMORY_DAYS = 3
+
 # Zona horaria Chile (UTC-3 en horario de verano, -4 invierno). Usamos -3 fijo para simplicidad.
 CHILE_TZ = timezone(timedelta(hours=-3))
 
@@ -151,6 +158,11 @@ GENERAL_FEEDS = {
 # aparecen las skills, agentes y herramientas que están explotando.
 GITHUB_NEW_DAYS = 14
 GITHUB_MIN_STARS = 500
+# Ritmo mínimo para ser candidato. Sin este piso el pool de 14 días cambia
+# poco de un día a otro: al enviar los mejores, los que venían detrás pasaban
+# a ser "4" y la sección salía todos los días con repos de ~350 estrellas por
+# día. Los que valieron la pena la primera semana iban de 600 a 3900 por día.
+GITHUB_MIN_STARS_PER_DAY = 500
 
 # Hacker News vía la API de búsqueda de Algolia (los feeds filtrados de hnrss
 # devuelven 502 a ratos). Sin filtrar por palabras: lo muy votado que no tiene
@@ -364,9 +376,19 @@ def fetch_feed(url, cutoff, max_items=None):
     return items
 
 
+def github_owner(link):
+    """Dueño (usuario u organización) de un link de GitHub, o None."""
+    p = urlparse(link)
+    if p.netloc.lower() not in ("github.com", "www.github.com"):
+        return None
+    owner = p.path.strip("/").split("/")[0]
+    return owner.lower() or None
+
+
 def fetch_github_new():
-    """Repos creados en los últimos GITHUB_NEW_DAYS días con al menos
-    GITHUB_MIN_STARS estrellas, de más a menos estrellas."""
+    """Repos creados en los últimos GITHUB_NEW_DAYS días que ganan al menos
+    GITHUB_MIN_STARS_PER_DAY estrellas por día, uno por autor (el de más
+    estrellas, con los demás mencionados en el contexto)."""
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=GITHUB_NEW_DAYS)).date().isoformat()
     headers = {**UA_HEADERS, "Accept": "application/vnd.github+json"}
@@ -377,7 +399,7 @@ def fetch_github_new():
         "q": f"created:>={since} stars:>={GITHUB_MIN_STARS}",
         "sort": "stars",
         "order": "desc",
-        "per_page": 30,
+        "per_page": 100,
     }
     try:
         resp = requests.get("https://api.github.com/search/repositories",
@@ -387,23 +409,39 @@ def fetch_github_new():
     except (requests.RequestException, ValueError, KeyError) as e:
         print(f"  ! Error leyendo repos nuevos de GitHub: {e}", file=sys.stderr)
         return []
-    items = []
+    # Agrupados por autor: algunos publican una familia de repos parecidos
+    # (storytold sacó una decena de clones de Adobe la misma semana) que, si
+    # no, ocupan la sección varios días seguidos.
+    by_owner = {}
     for r in repos:
-        desc = (r.get("description") or "").strip()[:MAX_DESC_CHARS]
         try:
             created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
-            age = max(1, (now - created).days)
+            age = max(1.0, (now - created).total_seconds() / 86400)
         except (KeyError, ValueError):
-            age = GITHUB_NEW_DAYS
+            age = float(GITHUB_NEW_DAYS)
+        per_day = r["stargazers_count"] / age
+        if per_day < GITHUB_MIN_STARS_PER_DAY:
+            continue
+        by_owner.setdefault(r["full_name"].split("/")[0].lower(), []).append((r, age, per_day))
+    items = []
+    for group in by_owner.values():
+        r, age, per_day = group[0]
+        desc = (r.get("description") or "").strip()[:MAX_DESC_CHARS]
+        siblings = [s["full_name"].split("/")[1] for s, _, _ in group[1:]]
+        if siblings:
+            desc += (f" (el mismo autor tiene otros {len(siblings)} repos nuevos "
+                     f"populares: {', '.join(siblings[:8])})")
         items.append({
             "title": r["full_name"],
             "link": r["html_url"],
-            "desc": f"[{r['stargazers_count']} estrellas en GitHub en {age} días] {desc}",
+            "desc": (f"[{r['stargazers_count']} estrellas en GitHub en {round(age)} días, "
+                     f"~{round(per_day)} por día] {desc}"),
             "source": "GitHub",
             "lang": detect_lang(f"{r['full_name']} {desc}"),
         })
     print(f"  GitHub (repos de {GITHUB_NEW_DAYS} días, >= {GITHUB_MIN_STARS} estrellas): "
-          f"{len(items)} repos")
+          f"{len(repos)} repos, {len(items)} autores con >= {GITHUB_MIN_STARS_PER_DAY} "
+          "estrellas por día")
     return items
 
 
@@ -575,6 +613,58 @@ def classify_tech(client, items):
     return result
 
 
+REPEATS_PROMPT = """Eres un editor. Abajo hay noticias candidatas para el resumen de hoy, ordenadas de más a menos importante, y los titulares que ya se enviaron en los últimos días.
+
+Marca como repetida cada candidata que:
+- trate del MISMO hecho que un titular YA ENVIADO, aunque cambie el medio, el idioma, el titular o el ángulo; o
+- trate del MISMO hecho que otra candidata que aparece ANTES en la lista.
+Mismo hecho = el mismo anuncio, lanzamiento, operación o evento. Ejemplos: dos notas del lanzamiento del mismo teléfono; "Paramount closes historic Warner Bros. merger" y "Paramount and Warner Bros. Discovery complete $110 billion megamerger"; "Chileno vende su startup Pimento a Mistral AI" y "Chileno que trabajó en Apple vendió su startup de IA a gigante francés". Dos noticias distintas de la misma empresa NO son repetidas.
+
+YA ENVIADOS (días anteriores):
+{sent}
+
+Responde SOLO con un array JSON con los números de las candidatas repetidas, sin texto adicional ([] si no hay ninguna):
+[3, 7]
+
+Candidatas:
+{items}
+"""
+
+
+def mark_repeats(client, items, labels, memory):
+    """Baja a score 1 las noticias tech que repiten un hecho ya enviado en
+    días anteriores o el de otra candidata más importante del mismo día. El
+    clasificador debería hacerlo, pero con 100+ noticias se le escapan. Solo
+    revisa las que pueden entrar en las secciones tech; si la llamada falla,
+    no cambia nada."""
+    pool = sorted(
+        (i for i, lab in enumerate(labels)
+         if lab["topic"] in PREFERRED_TECH_TOPICS and lab["score"] >= MIN_TECH_SCORE),
+        key=lambda i: -labels[i]["score"],
+    )
+    if not pool:
+        return
+    sent = "\n".join(f"- {d['title']}" for d in memory) or "(ninguno)"
+    prompt = (REPEATS_PROMPT.replace("{sent}", sent)
+              .replace("{items}", format_items([items[i] for i in pool])))
+    try:
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text
+        ids = json.loads(text[text.index("["):text.rindex("]") + 1])
+    except (anthropic.APIError, ValueError) as e:
+        print(f"  ! No pude revisar repetidas ({e}); sigo sin ese filtro", file=sys.stderr)
+        return
+    for n in ids:
+        if isinstance(n, int) and 1 <= n <= len(pool):
+            i = pool[n - 1]
+            labels[i]["score"] = 1
+            print(f"    🔁 repetida: {items[i]['title'][:90]}")
+
+
 def select_tech(items, labels):
     """Aplica los cupos. Devuelve (tech_chile, tech_mundial, extras_general)
     donde extras_general = {sección: [items]} con noticias tech de
@@ -635,17 +725,17 @@ def select_tech(items, labels):
 HALLAZGOS_PROMPT = """Eres un curador de novedades de inteligencia artificial. El lector trabaja en tech y quiere enterarse, de vez en cuando, de las cosas nuevas que la gente está HACIENDO con IA: herramientas, skills y plugins para agentes (Claude Code, Codex, Cursor...), agentes open source, apps, mods y proyectos que muestran algo que antes no se podía hacer. Ejemplos del tipo de cosa que busca: OpenClaw cuando apareció, o la herramienta con IA que permitió descomprimir y mezclar juegos para meter Minecraft dentro de Skyrim.
 
 Para cada noticia devuelve:
-- "hallazgo": true si es algo CONCRETO que se puede usar, probar o ver: una herramienta, repo, skill, agente, app, mod, demo o proyecto hecho con IA o para IA. false para: anuncios de modelos o de grandes empresas ("OpenAI lanza X"), financiamiento, política, regulación, seguridad e incidentes, opinión, debates, preguntas, quejas, memes, benchmarks, papers sin herramienta usable, y proyectos que no tienen que ver con IA.
+- "hallazgo": true si es algo CONCRETO que se puede usar, probar o ver: una herramienta, repo, skill, agente, app, mod, demo o proyecto hecho con IA o para IA. false para: anuncios de modelos o de grandes empresas ("OpenAI lanza X"), financiamiento, política, regulación, seguridad e incidentes, opinión, debates, preguntas, quejas, memes, benchmarks, papers sin herramienta usable, y proyectos que no tienen que ver con IA. Excepción: un proyecto que muy probablemente se construyó con agentes de IA aunque su descripción no lo diga (p. ej. la reimplementación completa de un programa conocido, como Photoshop o Premiere, aparecida en pocas semanas; o un port o ingeniería inversa enorme hecho por una sola persona) SÍ es hallazgo: muestra lo que hoy se puede hacer con IA. Repos que parecen spam o malware (activadores, cracks, bots para raidear o farmear Discord, cheats) son false.
 - "score": 1-5, qué tanto vale la pena enterarse:
   * 5: se está volviendo viral o abre una posibilidad realmente nueva; se va a hablar de esto por semanas.
   * 4: popular y útil o sorprendente; vale la pena probarlo o conocerlo.
   * 3: interesante pero de nicho, o una variación más de algo que ya existe.
   * 1-2: menor, demasiado específico, o DUPLICADO.
   Señales de popularidad (cada noticia trae una entre corchetes):
-  * "[N estrellas en GitHub en D días]": repo nuevo. Mira el ritmo: 1000 o más en una o dos semanas es mucho; 3000 o más es viral.
+  * "[N estrellas en GitHub en D días, ~R por día]": repo nuevo. Todos los repos de la lista ya ganan al menos 500 estrellas por día, así que eso solo no basta para un 4: decide por lo que el proyecto es. 1500 o más por día es viral.
   * "[N puntos en HN, M comentarios]": 300 o más puntos es mucho; 600 o más es viral.
   Sé exigente: la mayoría de los días NINGUNA noticia debería tener 4 o más.
-  DUPLICADOS: si varias noticias tratan del mismo proyecto, deja score 1 en todas menos la más completa. También score 1 si el proyecto ya está en la lista YA ENVIADOS, aunque cambie el título o la fuente.
+  DUPLICADOS: si varias noticias tratan del mismo proyecto, deja score 1 en todas menos la más completa. También score 1 si el proyecto ya está en la lista YA ENVIADOS, aunque cambie el título o la fuente, o si es otro repo de la misma familia de uno ya enviado (mismo autor, misma idea).
 
 YA ENVIADOS (días anteriores):
 {sent}
@@ -662,27 +752,26 @@ def _link_key(link):
     return link.strip().rstrip("/").lower()
 
 
-def load_hallazgos_memory():
-    """Hallazgos enviados en los últimos HALLAZGOS_MEMORY_DAYS días:
-    [{title, link, date}]. Sin archivo (primera vez o cache perdido) es []."""
+def load_memory(path, days):
+    """Lo enviado en los últimos `days` días: [{title, link, date}]. Sin
+    archivo (primera vez o cache perdido) es []."""
     try:
-        with open(HALLAZGOS_MEMORY_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as e:
-        print(f"  ! No pude leer {HALLAZGOS_MEMORY_FILE} ({e}); empiezo sin memoria",
-              file=sys.stderr)
+        print(f"  ! No pude leer {path} ({e}); empiezo sin memoria", file=sys.stderr)
         return []
-    since = (datetime.now(CHILE_TZ) - timedelta(days=HALLAZGOS_MEMORY_DAYS)).date().isoformat()
+    since = (datetime.now(CHILE_TZ) - timedelta(days=days)).date().isoformat()
     return [d for d in data if isinstance(d, dict) and d.get("date", "") >= since]
 
 
-def save_hallazgos_memory(memory, sent):
+def save_memory(path, memory, sent):
     today = datetime.now(CHILE_TZ).date().isoformat()
     memory = memory + [{"title": it["title"], "link": it["link"], "date": today}
                        for it in sent]
-    with open(HALLAZGOS_MEMORY_FILE, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(memory, f, ensure_ascii=False, indent=1)
 
 
@@ -710,8 +799,10 @@ def classify_hallazgos(client, items, memory):
 
 def select_hallazgos(items, labels, memory, taken):
     """Hasta QUOTA_HALLAZGOS hallazgos con score >= MIN_HALLAZGO_SCORE que no
-    se hayan enviado antes ni estén ya en las secciones tech (taken)."""
+    se hayan enviado antes ni estén ya en las secciones tech (taken). De un
+    autor de GitHub ya enviado no entra otro repo mientras dure la memoria."""
     sent_links = {_link_key(d.get("link", "")) for d in memory}
+    sent_owners = {github_owner(d.get("link", "")) for d in memory} - {None}
     taken_links = {_link_key(it["link"]) for it in taken}
     taken_titles = {it["title"].lower() for it in taken}
     candidates = []
@@ -722,13 +813,24 @@ def select_hallazgos(items, labels, memory, taken):
         key = _link_key(it["link"])
         if key in sent_links or key in taken_links or it["title"].lower() in taken_titles:
             continue
+        if github_owner(it["link"]) in sent_owners:
+            continue
         candidates.append(it)
     candidates.sort(key=lambda it: -it["score"])
     # Log de calibración: si la sección sale muy seguido o nunca, mira aquí.
     print(f"  hallazgos candidatos: {len(candidates)} (vara: score >= {MIN_HALLAZGO_SCORE})")
     for it in candidates[:6]:
         print(f"    🧪? [{it['score']}] {it['title'][:90]} ({it['source']})")
-    return [it for it in candidates if it["score"] >= MIN_HALLAZGO_SCORE][:QUOTA_HALLAZGOS]
+    chosen, owners = [], set()
+    for it in candidates:
+        owner = github_owner(it["link"])
+        if it["score"] < MIN_HALLAZGO_SCORE or len(chosen) == QUOTA_HALLAZGOS:
+            break
+        if owner and owner in owners:
+            continue
+        chosen.append(it)
+        owners.add(owner)
+    return chosen
 
 
 # ------------------------------------------------------------------
@@ -873,6 +975,10 @@ def main():
         # Fallback: sin clasificación tratamos todo como tech mundial.
         print("  ! Clasificación falló; usando todo como tech mundial.", file=sys.stderr)
         labels = [{"region": "global", "topic": "producto", "score": 3} for _ in tech]
+    news_memory = load_memory(NEWS_MEMORY_FILE, NEWS_MEMORY_DAYS)
+    print(f"Revisando repetidas ({len(news_memory)} noticias tech enviadas en los últimos "
+          f"{NEWS_MEMORY_DAYS} días)...")
+    mark_repeats(client, tech, labels, news_memory)
     tech_chile, tech_mundial, extras = select_tech(tech, labels)
     print(f"  seleccionadas: {len(tech_chile)} tech Chile + {len(tech_mundial)} tech mundial")
     for it in tech_chile:
@@ -881,7 +987,7 @@ def main():
         print(f"    🌐 [{it['score']}/{it['topic']}] {it['title']}")
 
     # Hallazgos IA: sección opcional; si algo falla, el resumen sale sin ella.
-    memory = load_hallazgos_memory()
+    memory = load_memory(HALLAZGOS_MEMORY_FILE, HALLAZGOS_MEMORY_DAYS)
     hallazgos = []
     print(f"Clasificando {len(ai)} candidatos a hallazgos IA "
           f"({len(memory)} enviados en los últimos {HALLAZGOS_MEMORY_DAYS} días)...")
@@ -904,14 +1010,16 @@ def main():
     summary = summarize(client, build_prompt(tech_chile, tech_mundial, general, extras,
                                              hallazgos))
 
+    # Siempre al log, para poder revisar después qué se envió.
+    print("\n" + "=" * 60 + "\n" + summary + "\n" + "=" * 60)
     if dry_run:
-        print("\n" + "=" * 60 + "\n" + summary + "\n" + "=" * 60)
         return
     print("Enviando a Telegram...")
     send_telegram(summary)
-    # Se recuerda solo después de enviar: un dry run no "gasta" un hallazgo.
+    # Se recuerda solo después de enviar: un dry run no "gasta" nada.
+    save_memory(NEWS_MEMORY_FILE, news_memory, tech_chile + tech_mundial)
     if hallazgos:
-        save_hallazgos_memory(memory, hallazgos)
+        save_memory(HALLAZGOS_MEMORY_FILE, memory, hallazgos)
     print("Listo ✅")
 
 
