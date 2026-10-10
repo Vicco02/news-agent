@@ -842,11 +842,15 @@ def build_prompt(tech_chile, tech_mundial, general, extras, hallazgos):
             return ""
         return f"\n## {title}\n({instruction})\n{format_items(items, with_link=True)}\n"
 
-    fixed = "escribe TODAS estas noticias, en este orden; ya están seleccionadas"
-    raw = block(SECTION_TECH_CHILE, tech_chile, fixed)
-    raw += block(SECTION_TECH_MUNDIAL, tech_mundial, fixed)
+    # Con "escribe TODAS" a secas Haiku a veces se saltaba noticias (escribió
+    # 2 de 5 en Tech mundial); el número explícito se respeta mejor.
+    def fixed(items):
+        return (f"escribe las {len(items)} noticias, TODAS, en este orden; ya están "
+                "seleccionadas y no se puede omitir ninguna")
+    raw = block(SECTION_TECH_CHILE, tech_chile, fixed(tech_chile))
+    raw += block(SECTION_TECH_MUNDIAL, tech_mundial, fixed(tech_mundial))
     raw += block(SECTION_HALLAZGOS, hallazgos,
-                 fixed + "; para cada una explica qué es, qué se puede hacer con ella "
+                 fixed(hallazgos) + "; para cada una explica qué es, qué se puede hacer con ella "
                  "y qué tan popular está (estrellas en GitHub o puntos en Hacker News, "
                  "según el CONTEXTO)")
 
@@ -855,8 +859,12 @@ def build_prompt(tech_chile, tech_mundial, general, extras, hallazgos):
         pool = general.get(section, []) + extras.get(section, [])
         raw += block(section, pool, f"elige SOLO las {quota} más importantes; descarta el resto")
 
+    counts = ", ".join(f"{len(items)} en {section}" for section, items in (
+        (SECTION_TECH_CHILE, tech_chile), (SECTION_TECH_MUNDIAL, tech_mundial),
+        (SECTION_HALLAZGOS, hallazgos)) if items)
     quota_note = (
-        f"Las secciones tech ya vienen seleccionadas. En {SECTION_CHILE} elige "
+        f"Las secciones tech ya vienen seleccionadas: escribe exactamente {counts}. "
+        f"En {SECTION_CHILE} elige "
         f"{QUOTA_CHILE_GENERAL} noticias y en {SECTION_MUNDO} elige {QUOTA_MUNDO_GENERAL}: "
         "prioriza hechos de peso (política, economía, seguridad, grandes empresas) "
         "y descarta farándula, deportes, clickbait y duplicados."
